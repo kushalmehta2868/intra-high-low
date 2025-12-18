@@ -5,6 +5,7 @@ import { AngelOneClient } from '../angelone/client';
 import { TradingTelegramBot } from '../../telegram/bot';
 import { TelegramConfig } from '../../types';
 import { MarketDataFetcher } from '../../services/marketDataFetcher';
+import { symbolTokenService } from '../../services/symbolTokenService';
 
 interface SimulatedOrder extends Order {
   submittedAt: Date;
@@ -23,7 +24,6 @@ export class PaperBroker extends BaseBroker {
   // Real Angel One client for market data
   private angelClient: AngelOneClient | null = null;
   private telegramBot: TradingTelegramBot | null = null;
-  private symbolTokenMap: Map<string, string> = new Map();
   private marketDataFetcher: MarketDataFetcher | null = null;
 
   constructor(
@@ -44,35 +44,6 @@ export class PaperBroker extends BaseBroker {
     if (telegramConfig) {
       this.telegramBot = new TradingTelegramBot(telegramConfig);
     }
-
-    this.initializeSymbolTokens();
-  }
-
-  private initializeSymbolTokens(): void {
-    this.symbolTokenMap.set('RELIANCE-EQ', '2885');
-    this.symbolTokenMap.set('TCS-EQ', '11536');
-    this.symbolTokenMap.set('INFY-EQ', '1594');
-    this.symbolTokenMap.set('HDFCBANK-EQ', '1333');
-    this.symbolTokenMap.set('ICICIBANK-EQ', '4963');
-    this.symbolTokenMap.set('TRENT-EQ', '1964');
-    this.symbolTokenMap.set('ULTRACEMCO-EQ', '11532');
-    this.symbolTokenMap.set('MUTHOOTFIN-EQ', '23650');
-    this.symbolTokenMap.set('COFORGE-EQ', '11543');
-    this.symbolTokenMap.set('ABB-EQ', '13');
-    this.symbolTokenMap.set('ALKEM-EQ', '11703');
-    this.symbolTokenMap.set('AMBER-EQ', '1185');
-    this.symbolTokenMap.set('ANGELONE-EQ', '324');
-    this.symbolTokenMap.set('APOLLOHOSP-EQ', '157');
-    this.symbolTokenMap.set('BAJAJ-AUTO-EQ', '16669');
-    this.symbolTokenMap.set('BHARTIARTL-EQ', '10604');
-    this.symbolTokenMap.set('BRITANNIA-EQ', '547');
-    this.symbolTokenMap.set('BSE-EQ', '19585');
-    this.symbolTokenMap.set('CUMMINSIND-EQ', '1901');
-    this.symbolTokenMap.set('DIXON-EQ', '21690');
-    this.symbolTokenMap.set('GRASIM-EQ', '1232');
-    this.symbolTokenMap.set('HAL-EQ', '2303');
-    this.symbolTokenMap.set('HDFCAMC-EQ', '4244');
-    this.symbolTokenMap.set('HEROMOTOCO-EQ', '1348');
   }
 
   public async connect(): Promise<boolean> {
@@ -84,6 +55,10 @@ export class PaperBroker extends BaseBroker {
           logger.warn('Angel One connection failed - will use fallback prices');
         } else {
           logger.info('✅ Connected to Angel One for REAL market data');
+
+          // Refresh symbol token cache
+          await symbolTokenService.refreshCache();
+          logger.info('✅ Symbol token cache refreshed');
 
           // Initialize and start market data fetcher
           this.marketDataFetcher = new MarketDataFetcher(this.angelClient);
@@ -282,7 +257,7 @@ export class PaperBroker extends BaseBroker {
     }
 
     try {
-      const symbolToken = this.symbolTokenMap.get(symbol);
+      const symbolToken = await symbolTokenService.getToken(symbol);
       if (!symbolToken) {
         logger.warn('Symbol token not found', { symbol });
         return null;
@@ -494,10 +469,10 @@ export class PaperBroker extends BaseBroker {
   }
 
   /**
-   * Add symbol token mapping
+   * @deprecated Tokens are now fetched dynamically. This method is kept for backwards compatibility.
    */
   public addSymbolToken(symbol: string, token: string): void {
-    this.symbolTokenMap.set(symbol, token);
+    logger.warn('addSymbolToken is deprecated - tokens are now fetched dynamically');
   }
 
   public getAccountStats() {

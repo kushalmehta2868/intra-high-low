@@ -10,6 +10,7 @@ import { TradingTelegramBot } from '../telegram/bot';
 import { AppConfig, TradingMode, StrategySignal, OrderSide, OrderType, Position, Order } from '../types';
 import { logger } from '../utils/logger';
 import configManager from '../config';
+import { positionLockManager } from '../utils/positionLock';
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -187,70 +188,82 @@ export class TradingEngine extends EventEmitter {
 
     logger.info('Processing strategy signal', signal);
 
-    try {
-      if (signal.action === 'CLOSE') {
-        await this.closePosition(signal.symbol, signal.reason);
-        return;
-      }
+    // Use position lock to prevent race conditions
+    const result = await positionLockManager.withLock(signal.symbol, async () => {
+      try {
+        if (signal.action === 'CLOSE') {
+          await this.closePosition(signal.symbol, signal.reason);
+          return;
+        }
 
-      const currentPrice = await this.broker.getLTP(signal.symbol);
-      if (!currentPrice) {
-        logger.error('Failed to get current price', { symbol: signal.symbol });
-        return;
-      }
+        const currentPrice = await this.broker.getLTP(signal.symbol);
+        if (!currentPrice) {
+          logger.error('Failed to get current price', { symbol: signal.symbol });
+          return;
+        }
 
-      const stopLoss = signal.stopLoss || currentPrice * 0.98;
-      const quantity = signal.quantity || this.riskManager.calculatePositionSize(currentPrice, stopLoss);
+        const stopLoss = signal.stopLoss || currentPrice * 0.98;
+        const quantity = signal.quantity || this.riskManager.calculatePositionSize(currentPrice, stopLoss);
 
-      if (quantity === 0) {
-        logger.warn('Calculated quantity is 0', { signal });
-        return;
-      }
+        if (quantity === 0) {
+          logger.warn('Calculated quantity is 0', { signal });
+          return;
+        }
 
-      const riskCheck = this.riskManager.checkOrderRisk(
-        signal.symbol,
-        signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
-        quantity,
-        currentPrice,
-        stopLoss
-      );
-
-      if (!riskCheck.allowed) {
-        logger.warn('Risk check failed', { signal, reason: riskCheck.reason });
-        await this.telegramBot.sendAlert('Risk Check Failed', riskCheck.reason || 'Unknown reason');
-        return;
-      }
-
-      const order = await this.broker.placeOrder(
-        signal.symbol,
-        signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
-        OrderType.MARKET,
-        quantity,
-        undefined,
-        stopLoss
-      );
-
-      if (order) {
-        await this.telegramBot.sendTradeNotification(
-          signal.action,
+        const riskCheck = this.riskManager.checkOrderRisk(
           signal.symbol,
+          signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
           quantity,
           currentPrice,
-          signal.reason
+          stopLoss
         );
 
-        logger.audit('SIGNAL_EXECUTED', { signal, order });
-      } else {
-        logger.error('Failed to place order', { signal });
-        await this.telegramBot.sendAlert('Order Failed', `Failed to place order for ${signal.symbol}`);
+        if (!riskCheck.allowed) {
+          logger.warn('Risk check failed', { signal, reason: riskCheck.reason });
+          await this.telegramBot.sendAlert('Risk Check Failed', riskCheck.reason || 'Unknown reason');
+          return;
+        }
+
+        const order = await this.broker.placeOrder(
+          signal.symbol,
+          signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
+          OrderType.MARKET,
+          quantity,
+          undefined,
+          stopLoss
+        );
+
+        if (order) {
+          await this.telegramBot.sendTradeNotification(
+            signal.action,
+            signal.symbol,
+            quantity,
+            currentPrice,
+            signal.reason
+          );
+
+          logger.audit('SIGNAL_EXECUTED', { signal, order });
+        } else {
+          logger.error('Failed to place order', { signal });
+          await this.telegramBot.sendAlert('Order Failed', `Failed to place order for ${signal.symbol}`);
+        }
+      } catch (error: any) {
+        logger.error('Error handling strategy signal', error);
+        await this.telegramBot.sendAlert('Signal Execution Error', error.message);
       }
-    } catch (error: any) {
-      logger.error('Error handling strategy signal', error);
-      await this.telegramBot.sendAlert('Signal Execution Error', error.message);
+    });
+
+    if (result === null) {
+      logger.warn('Signal processing skipped - position lock could not be acquired', { signal });
+      await this.telegramBot.sendAlert(
+        'Signal Skipped',
+        `Could not process signal for ${signal.symbol} - position is being modified by another operation`
+      );
     }
   }
 
   private async closePosition(symbol: string, reason: string): Promise<void> {
+    // Note: This is called within withLock, so no need to re-acquire lock
     const position = this.positionManager.getPosition(symbol);
     if (!position) {
       logger.warn('No position to close', { symbol });
@@ -387,6 +400,9 @@ export class TradingEngine extends EventEmitter {
 
     await this.stopStrategies();
     await this.closeAllPositions('Engine shutdown');
+
+    // Release all position locks
+    positionLockManager.releaseAllLocks();
 
     this.scheduler.stop();
     await this.telegramBot.stop();

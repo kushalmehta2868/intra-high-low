@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { AngelOneClient } from '../brokers/angelone/client';
 import { MarketData } from '../types';
 import { logger } from '../utils/logger';
+import { symbolTokenService } from './symbolTokenService';
 
 interface SymbolPriceTracking {
   open: number;
@@ -12,47 +13,51 @@ interface SymbolPriceTracking {
 
 export class MarketDataFetcher extends EventEmitter {
   private client: AngelOneClient;
-  private symbols: Map<string, string> = new Map(); // symbol -> token
+  private symbols: string[] = []; // Watchlist symbols
   private priceTracking: Map<string, SymbolPriceTracking> = new Map(); // Track OHLC
   private isRunning: boolean = false;
   private fetchInterval: NodeJS.Timeout | null = null;
   private readonly FETCH_INTERVAL_MS = 5000; // Fetch every 5 seconds
 
-  constructor(client: AngelOneClient) {
+  constructor(client: AngelOneClient, watchlist: string[] = []) {
     super();
     this.client = client;
-    this.initializeSymbolTokens();
+    this.symbols = watchlist.length > 0 ? watchlist : this.getDefaultWatchlist();
+    this.initializePriceTracking();
   }
 
-  private initializeSymbolTokens(): void {
-    // NSE symbol tokens
-    this.symbols.set('RELIANCE-EQ', '2885');
-    this.symbols.set('TCS-EQ', '11536');
-    this.symbols.set('INFY-EQ', '1594');
-    this.symbols.set('HDFCBANK-EQ', '1333');
-    this.symbols.set('ICICIBANK-EQ', '4963');
-    this.symbols.set('TRENT-EQ', '1964');
-    this.symbols.set('ULTRACEMCO-EQ', '11532');
-    this.symbols.set('MUTHOOTFIN-EQ', '23650');
-    this.symbols.set('COFORGE-EQ', '11543');
-    this.symbols.set('ABB-EQ', '13');
-    this.symbols.set('ALKEM-EQ', '11703');
-    this.symbols.set('AMBER-EQ', '1185');
-    this.symbols.set('ANGELONE-EQ', '324');
-    this.symbols.set('APOLLOHOSP-EQ', '157');
-    this.symbols.set('BAJAJ-AUTO-EQ', '16669');
-    this.symbols.set('BHARTIARTL-EQ', '10604');
-    this.symbols.set('BRITANNIA-EQ', '547');
-    this.symbols.set('BSE-EQ', '19585');
-    this.symbols.set('CUMMINSIND-EQ', '1901');
-    this.symbols.set('DIXON-EQ', '21690');
-    this.symbols.set('GRASIM-EQ', '1232');
-    this.symbols.set('HAL-EQ', '2303');
-    this.symbols.set('HDFCAMC-EQ', '4244');
-    this.symbols.set('HEROMOTOCO-EQ', '1348');
+  private getDefaultWatchlist(): string[] {
+    return [
+      'RELIANCE-EQ',
+      'TCS-EQ',
+      'INFY-EQ',
+      'HDFCBANK-EQ',
+      'ICICIBANK-EQ',
+      'TRENT-EQ',
+      'ULTRACEMCO-EQ',
+      'MUTHOOTFIN-EQ',
+      'COFORGE-EQ',
+      'ABB-EQ',
+      'ALKEM-EQ',
+      'AMBER-EQ',
+      'ANGELONE-EQ',
+      'APOLLOHOSP-EQ',
+      'BAJAJ-AUTO-EQ',
+      'BHARTIARTL-EQ',
+      'BRITANNIA-EQ',
+      'BSE-EQ',
+      'CUMMINSIND-EQ',
+      'DIXON-EQ',
+      'GRASIM-EQ',
+      'HAL-EQ',
+      'HDFCAMC-EQ',
+      'HEROMOTOCO-EQ'
+    ];
+  }
 
+  private initializePriceTracking(): void {
     // Initialize price tracking for each symbol
-    for (const symbol of this.symbols.keys()) {
+    for (const symbol of this.symbols) {
       this.priceTracking.set(symbol, {
         open: 0,
         high: 0,
@@ -62,7 +67,8 @@ export class MarketDataFetcher extends EventEmitter {
     }
 
     logger.info('Market data symbols initialized', {
-      symbols: Array.from(this.symbols.keys())
+      symbols: this.symbols,
+      count: this.symbols.length
     });
   }
 
@@ -104,9 +110,18 @@ export class MarketDataFetcher extends EventEmitter {
 
   private async fetchAllMarketData(): Promise<void> {
     try {
+      // Get tokens for all symbols dynamically
+      const tokensMap = await symbolTokenService.getTokens(this.symbols);
+      const tokens = Array.from(tokensMap.values());
+
+      if (tokens.length === 0) {
+        logger.warn('No symbol tokens available for market data fetch');
+        return;
+      }
+
       // Prepare exchangeTokens for batch request
       const exchangeTokens: { [key: string]: string[] } = {
-        'NSE': Array.from(this.symbols.values())
+        'NSE': tokens
       };
 
       // Fetch all market data in one API call
@@ -118,7 +133,13 @@ export class MarketDataFetcher extends EventEmitter {
       }
 
       // Process each symbol's data
-      for (const [symbol, token] of this.symbols) {
+      for (const symbol of this.symbols) {
+        const token = tokensMap.get(symbol);
+        if (!token) {
+          logger.warn(`No token found for ${symbol}`);
+          continue;
+        }
+
         const symbolData = marketData.fetched.find((item: any) => item.symbolToken === token);
         if (symbolData) {
           this.processSymbolData(symbol, symbolData);
@@ -215,24 +236,26 @@ export class MarketDataFetcher extends EventEmitter {
     logger.info('📅 Daily price tracking data reset');
   }
 
-  public addSymbol(symbol: string, token: string): void {
-    this.symbols.set(symbol, token);
-    this.priceTracking.set(symbol, {
-      open: 0,
-      high: 0,
-      low: Infinity,
-      lastClose: 0
-    });
-    logger.info(`Added symbol to market data fetcher`, { symbol, token });
+  public addSymbol(symbol: string): void {
+    if (!this.symbols.includes(symbol)) {
+      this.symbols.push(symbol);
+      this.priceTracking.set(symbol, {
+        open: 0,
+        high: 0,
+        low: Infinity,
+        lastClose: 0
+      });
+      logger.info(`Added symbol to market data fetcher`, { symbol });
+    }
   }
 
   public removeSymbol(symbol: string): void {
-    this.symbols.delete(symbol);
+    this.symbols = this.symbols.filter(s => s !== symbol);
     this.priceTracking.delete(symbol);
     logger.info(`Removed symbol from market data fetcher`, { symbol });
   }
 
   public getSymbols(): string[] {
-    return Array.from(this.symbols.keys());
+    return [...this.symbols];
   }
 }

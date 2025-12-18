@@ -3,46 +3,21 @@ import { AngelOneClient } from './client';
 import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade } from '../../types';
 import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
+import { symbolTokenService } from '../../services/symbolTokenService';
 
 export class AngelOneBroker extends BaseBroker {
   private client: AngelOneClient;
-  private symbolTokenMap: Map<string, string> = new Map();
 
   constructor(config: BrokerConfig) {
     super();
     this.client = new AngelOneClient(config);
-    this.initializeSymbolTokens();
   }
 
-  private initializeSymbolTokens(): void {
-    this.symbolTokenMap.set('RELIANCE-EQ', '2885');
-    this.symbolTokenMap.set('TCS-EQ', '11536');
-    this.symbolTokenMap.set('INFY-EQ', '1594');
-    this.symbolTokenMap.set('HDFCBANK-EQ', '1333');
-    this.symbolTokenMap.set('ICICIBANK-EQ', '4963');
-    this.symbolTokenMap.set('TRENT-EQ', '1964');
-    this.symbolTokenMap.set('ULTRACEMCO-EQ', '11532');
-    this.symbolTokenMap.set('MUTHOOTFIN-EQ', '23650');
-    this.symbolTokenMap.set('COFORGE-EQ', '11543');
-    this.symbolTokenMap.set('ABB-EQ', '13');
-    this.symbolTokenMap.set('ALKEM-EQ', '11703');
-    this.symbolTokenMap.set('AMBER-EQ', '1185');
-    this.symbolTokenMap.set('ANGELONE-EQ', '324');
-    this.symbolTokenMap.set('APOLLOHOSP-EQ', '157');
-    this.symbolTokenMap.set('BAJAJ-AUTO-EQ', '16669');
-    this.symbolTokenMap.set('BHARTIARTL-EQ', '10604');
-    this.symbolTokenMap.set('BRITANNIA-EQ', '547');
-    this.symbolTokenMap.set('BSE-EQ', '19585');
-    this.symbolTokenMap.set('CUMMINSIND-EQ', '1901');
-    this.symbolTokenMap.set('DIXON-EQ', '21690');
-    this.symbolTokenMap.set('GRASIM-EQ', '1232');
-    this.symbolTokenMap.set('HAL-EQ', '2303');
-    this.symbolTokenMap.set('HDFCAMC-EQ', '4244');
-    this.symbolTokenMap.set('HEROMOTOCO-EQ', '1348');
-  }
-
-  private getSymbolToken(symbol: string): string {
-    return this.symbolTokenMap.get(symbol) || '';
+  /**
+   * Get symbol token dynamically from token service
+   */
+  private async getSymbolToken(symbol: string): Promise<string | null> {
+    return await symbolTokenService.getToken(symbol);
   }
 
   public async connect(): Promise<boolean> {
@@ -52,6 +27,10 @@ export class AngelOneBroker extends BaseBroker {
 
       if (success) {
         logger.info('Angel One broker connected successfully');
+
+        // Refresh symbol token cache on connect
+        await symbolTokenService.refreshCache();
+        logger.info('Symbol token cache refreshed');
       } else {
         logger.error('Failed to connect to Angel One broker');
       }
@@ -83,7 +62,7 @@ export class AngelOneBroker extends BaseBroker {
     }
 
     try {
-      const symbolToken = this.getSymbolToken(symbol);
+      const symbolToken = await this.getSymbolToken(symbol);
       if (!symbolToken) {
         logger.error('Symbol token not found', { symbol });
         return null;
@@ -268,7 +247,7 @@ export class AngelOneBroker extends BaseBroker {
     }
 
     try {
-      const symbolToken = this.getSymbolToken(symbol);
+      const symbolToken = await this.getSymbolToken(symbol);
       if (!symbolToken) {
         logger.error('Symbol token not found', { symbol });
         return null;
@@ -281,7 +260,10 @@ export class AngelOneBroker extends BaseBroker {
     }
   }
 
+  /**
+   * @deprecated Tokens are now fetched dynamically. This method is kept for backwards compatibility.
+   */
   public addSymbolToken(symbol: string, token: string): void {
-    this.symbolTokenMap.set(symbol, token);
+    logger.warn('addSymbolToken is deprecated - tokens are now fetched dynamically');
   }
 }

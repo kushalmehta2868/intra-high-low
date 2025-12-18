@@ -3,13 +3,20 @@ import { StrategyContext, MarketData, StrategySignal, Position } from '../types'
 import { logger } from '../utils/logger';
 
 interface SymbolState {
+  // Current day OHLC
   dayHigh: number;
   dayLow: number;
   open: number;
+
+  // PREVIOUS day's high/low for breakout detection
+  previousDayHigh: number;
+  previousDayLow: number;
+
   lastLTP: number;  // Track previous LTP to detect breakouts
   breakoutDetected: boolean;
   breakoutDirection: 'UP' | 'DOWN' | null;
   lastLogTime: number;  // Track last log time for periodic logging
+  lastResetDate: string;  // Track when we last reset for new day
 }
 
 export class DayHighLowBreakoutStrategy extends BaseStrategy {
@@ -30,10 +37,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         dayHigh: 0,
         dayLow: Infinity,
         open: 0,
+        previousDayHigh: 0,
+        previousDayLow: Infinity,
         lastLTP: 0,
         breakoutDetected: false,
         breakoutDirection: null,
-        lastLogTime: 0
+        lastLogTime: 0,
+        lastResetDate: ''
       });
     }
 
@@ -49,14 +59,21 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const state = this.symbolStates.get(data.symbol);
     if (!state) return;
 
+    // Check if it's a new trading day and reset accordingly
+    this.checkAndResetForNewDay(state);
+
+    // Set opening price on first data point
     if (state.open === 0) {
       state.open = data.open;
+      logger.info(`📊 [${data.symbol}] Opening price set`, {
+        open: `₹${data.open.toFixed(2)}`
+      });
     }
 
-    // Check for breakout FIRST using current state.dayHigh/dayLow
-    this.checkForBreakout(data, state, state.dayHigh, state.dayLow);
+    // Check for breakout FIRST using PREVIOUS day's high/low
+    this.checkForBreakout(data, state);
 
-    // THEN update day high/low AFTER checking
+    // THEN update current day's high/low AFTER checking
     state.dayHigh = Math.max(state.dayHigh, data.high);
     state.dayLow = Math.min(state.dayLow, data.low);
 
@@ -65,6 +82,37 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // Track last LTP for next breakout check
     state.lastLTP = data.ltp;
+  }
+
+  /**
+   * Check if it's a new trading day and reset state accordingly
+   */
+  private checkAndResetForNewDay(state: SymbolState): void {
+    const today = new Date().toISOString().split('T')[0];
+
+    if (state.lastResetDate !== today) {
+      // Save current day's high/low as previous day's before resetting
+      if (state.dayHigh > 0) {
+        state.previousDayHigh = state.dayHigh;
+      }
+      if (state.dayLow !== Infinity) {
+        state.previousDayLow = state.dayLow;
+      }
+
+      // Reset current day's data
+      state.dayHigh = 0;
+      state.dayLow = Infinity;
+      state.open = 0;
+      state.breakoutDetected = false;
+      state.breakoutDirection = null;
+      state.lastResetDate = today;
+
+      logger.info(`🔄 New trading day - state reset`, {
+        date: today,
+        previousDayHigh: state.previousDayHigh > 0 ? `₹${state.previousDayHigh.toFixed(2)}` : 'N/A',
+        previousDayLow: state.previousDayLow !== Infinity ? `₹${state.previousDayLow.toFixed(2)}` : 'N/A'
+      });
+    }
   }
 
   private logPriceLevels(data: MarketData, state: SymbolState): void {
@@ -101,7 +149,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
   }
 
-  private checkForBreakout(data: MarketData, state: SymbolState, previousDayHigh: number, previousDayLow: number): void {
+  private checkForBreakout(data: MarketData, state: SymbolState): void {
     if (state.breakoutDetected) {
       return;
     }
@@ -111,25 +159,22 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       return;
     }
 
-    // Simple breakout logic: LTP crossed the PREVIOUS day high/low
-    const highBreakout = data.ltp > previousDayHigh && previousDayHigh > 0;
-    const lowBreakout = data.ltp < previousDayLow && previousDayLow !== Infinity;
+    // Can't check breakout without previous day's data
+    if (state.previousDayHigh === 0 || state.previousDayLow === Infinity) {
+      return;
+    }
 
-    // Log breakout conditions for debugging
-    logger.info(`🔍 [${data.symbol}] Breakout Check`, {
-      symbol: data.symbol,
-      currentLTP: data.ltp.toFixed(2),
-      previousDayHigh: previousDayHigh.toFixed(2),
-      previousDayLow: previousDayLow === Infinity ? 'Infinity' : previousDayLow.toFixed(2),
-      newDayHigh: state.dayHigh.toFixed(2),
-      newDayLow: state.dayLow.toFixed(2),
-      highBreakoutCondition: `${data.ltp.toFixed(2)} > ${previousDayHigh.toFixed(2)}`,
-      highBreakoutMet: highBreakout,
-      lowBreakoutCondition: `${data.ltp.toFixed(2)} < ${previousDayLow === Infinity ? 'Infinity' : previousDayLow.toFixed(2)}`,
-      lowBreakoutMet: lowBreakout
-    });
+    // Breakout logic: LTP crossed the PREVIOUS day high/low with confirmation
+    const breakoutThreshold = 0.001; // 0.1% above/below for confirmation
+    const highBreakout = data.ltp > (state.previousDayHigh * (1 + breakoutThreshold));
+    const lowBreakout = data.ltp < (state.previousDayLow * (1 - breakoutThreshold));
 
-    if (highBreakout) {
+    // Calculate volume-based confirmation (if volume data available)
+    // For now, we'll add momentum confirmation
+    const priceChangePercent = ((data.ltp - state.open) / state.open) * 100;
+    const hasMomentum = Math.abs(priceChangePercent) > 0.5; // At least 0.5% move from open
+
+    if (highBreakout && hasMomentum) {
       state.breakoutDetected = true;
       state.breakoutDirection = 'UP';
 
@@ -153,13 +198,14 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       logger.info('🚀 HIGH BREAKOUT DETECTED! Signal generated (UP)', {
         symbol: data.symbol,
         breakoutPrice: `₹${data.ltp.toFixed(2)}`,
-        dayHigh: `₹${state.dayHigh.toFixed(2)}`,
-        dayLow: `₹${state.dayLow.toFixed(2)}`,
+        previousDayHigh: `₹${state.previousDayHigh.toFixed(2)}`,
+        currentDayHigh: `₹${state.dayHigh.toFixed(2)}`,
         open: `₹${state.open.toFixed(2)}`,
+        momentum: `${priceChangePercent.toFixed(2)}%`,
         stopLoss: `₹${stopLoss.toFixed(2)} (0.5% below entry)`,
-        target: `₹${target.toFixed(2)} (0.25% above entry)`,
+        target: `₹${target.toFixed(2)} (1.5% above entry)`,
         riskReward: `1:${riskRewardRatio.toFixed(2)}`,
-        priceMovement: `${((data.ltp - state.dayHigh) / state.dayHigh * 100).toFixed(2)}% above day high`
+        breakoutConfirmation: `${((data.ltp - state.previousDayHigh) / state.previousDayHigh * 100).toFixed(2)}% above previous day high`
       });
 
       logger.audit('STRATEGY_SIGNAL', {
@@ -168,13 +214,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       });
 
       this.emitSignal(signal);
-    } else if (lowBreakout) {
+    } else if (lowBreakout && hasMomentum) {
       state.breakoutDetected = true;
       state.breakoutDirection = 'DOWN';
 
-      // SELL: Stop Loss 0.5% above entry, Target 0.25% below entry
+      // SELL: Stop Loss 0.5% above entry, Target 1.5% below entry (1:3 risk/reward)
       const stopLoss = data.ltp * (1 + 0.005); // 0.5% above
-      const target = data.ltp * (1 - 0.0025);  // 0.25% below
+      const target = data.ltp * (1 - 0.015);  // 1.5% below
 
       const signal: StrategySignal = {
         symbol: data.symbol,
@@ -192,13 +238,14 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       logger.info('📉 LOW BREAKOUT DETECTED! Signal generated (DOWN)', {
         symbol: data.symbol,
         breakoutPrice: `₹${data.ltp.toFixed(2)}`,
-        dayHigh: `₹${state.dayHigh.toFixed(2)}`,
-        dayLow: `₹${state.dayLow.toFixed(2)}`,
+        previousDayLow: `₹${state.previousDayLow.toFixed(2)}`,
+        currentDayLow: `₹${state.dayLow.toFixed(2)}`,
         open: `₹${state.open.toFixed(2)}`,
+        momentum: `${priceChangePercent.toFixed(2)}%`,
         stopLoss: `₹${stopLoss.toFixed(2)} (0.5% above entry)`,
-        target: `₹${target.toFixed(2)} (0.25% below entry)`,
+        target: `₹${target.toFixed(2)} (1.5% below entry)`,
         riskReward: `1:${riskRewardRatio.toFixed(2)}`,
-        priceMovement: `${((state.dayLow - data.ltp) / state.dayLow * 100).toFixed(2)}% below day low`
+        breakoutConfirmation: `${((state.previousDayLow - data.ltp) / state.previousDayLow * 100).toFixed(2)}% below previous day low`
       });
 
       logger.audit('STRATEGY_SIGNAL', {
@@ -228,10 +275,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         dayHigh: 0,
         dayLow: Infinity,
         open: 0,
+        previousDayHigh: 0,
+        previousDayLow: Infinity,
         lastLTP: 0,
         breakoutDetected: false,
         breakoutDirection: null,
-        lastLogTime: 0
+        lastLogTime: 0,
+        lastResetDate: ''
       });
 
       logger.info('Symbol added to strategy watchlist', { symbol });
@@ -249,7 +299,18 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   }
 
   public resetDailyData(): void {
+    const today = new Date().toISOString().split('T')[0];
+
     for (const state of this.symbolStates.values()) {
+      // Save current day's high/low as previous day's before resetting
+      if (state.dayHigh > 0) {
+        state.previousDayHigh = state.dayHigh;
+      }
+      if (state.dayLow !== Infinity) {
+        state.previousDayLow = state.dayLow;
+      }
+
+      // Reset current day's data
       state.dayHigh = 0;
       state.dayLow = Infinity;
       state.open = 0;
@@ -257,6 +318,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.breakoutDetected = false;
       state.breakoutDirection = null;
       state.lastLogTime = 0;
+      state.lastResetDate = today;
     }
 
     logger.info('Daily data reset for all symbols');
