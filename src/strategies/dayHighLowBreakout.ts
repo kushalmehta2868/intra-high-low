@@ -218,9 +218,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.breakoutDetected = true;
       state.breakoutDirection = 'DOWN';
 
-      // SELL: Stop Loss 0.5% above entry, Target 1.5% below entry (1:3 risk/reward)
+      // SELL: Stop Loss 0.5% above entry, Target 0.25% below entry (1:1.25 risk/reward)
       const stopLoss = data.ltp * (1 + 0.005); // 0.5% above
-      const target = data.ltp * (1 - 0.015);  // 1.5% below
+      const target = data.ltp * (1 - 0.0025);  // 0.25% below
 
       const signal: StrategySignal = {
         symbol: data.symbol,
