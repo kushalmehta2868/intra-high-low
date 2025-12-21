@@ -1,0 +1,36 @@
+services:
+  # Background Worker - Trading Bot
+  - type: worker
+    name: angel-intraday-bot
+    env: node
+    region: singapore # or oregon, frankfurt based on your location
+    plan: starter # Free tier (or upgrade to standard for better performance)
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRADING_MODE
+        sync: false
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_ID
+        sync: false
+      - key: ANGEL_PASSWORD
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: WATCHLIST
+        value: TCS,RELIANCE,INFY
+      - key: MAX_POSITION_SIZE
+        value: "100000"
+      - key: DAILY_LOSS_LIMIT
+        value: "5000"
+      - key: MAX_OPEN_POSITIONS
+        value: "3"
+    autoDeploy: true
+    branch: main
