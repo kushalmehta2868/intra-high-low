@@ -274,4 +274,12 @@ export class AngelOneClient {
   public getFeedToken(): string | null {
     return this.feedToken;
   }
+
+  public getAuthToken(): string | null {
+    return this.jwtToken;
+  }
+
+  public getClientCode(): string {
+    return this.config.clientId;
+  }
 }
