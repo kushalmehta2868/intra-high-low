@@ -78,12 +78,16 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       });
     }
 
-    // Update current day's high/low BEFORE cross detection
+    // Cache previous levels BEFORE update
+    const prevDayHigh = state.dayHigh;
+    const prevDayLow = state.dayLow;
+
+    // Detect breakout using previous levels
+    this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
+
+    // Now update current day's high/low
     state.dayHigh = Math.max(state.dayHigh, data.high, data.ltp);
     state.dayLow = Math.min(state.dayLow, data.low, data.ltp);
-
-    // Check for breakout using CURRENT day's high/low with cross logic
-    this.checkForBreakout(data, state);
 
     // Log price levels every 5 minutes
     this.logPriceLevels(data, state);
@@ -175,10 +179,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    * Buy: prevLtp <= dayHigh AND ltp > dayHigh (cross ABOVE current day high)
    * Sell: prevLtp >= dayLow AND ltp < dayLow (cross BELOW current day low)
    */
-  private checkForBreakout(data: MarketData, state: SymbolState): void {
+  private checkForBreakout(data: MarketData, state: SymbolState, dayHigh: number,
+    dayLow: number): void {
     // Skip if we already have a position
     const existingPosition = this.context.positions.get(data.symbol);
-    if (existingPosition) {
+    if (existingPosition && existingPosition.quantity !== 0) {
       return;
     }
 
@@ -194,25 +199,18 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     const ltp = data.ltp;
     const prevLtp = state.prevLtp;
-    const dayHigh = state.dayHigh;
-    const dayLow = state.dayLow;
 
-    // Check for HIGH BREAKOUT (cross above current day high)
-    // Condition: prevLtp <= dayHigh AND ltp > dayHigh
     const crossedAboveHigh = prevLtp <= dayHigh && ltp > dayHigh;
+    const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
-      state.hasBrokenHighToday = true; // Mark to prevent duplicate signals
+      state.hasBrokenHighToday = true;
       this.on_buy_signal(data.symbol, ltp, dayHigh, prevLtp);
       return;
     }
 
-    // Check for LOW BREAKOUT (cross below current day low)
-    // Condition: prevLtp >= dayLow AND ltp < dayLow
-    const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
-
     if (crossedBelowLow && !state.hasBrokenLowToday) {
-      state.hasBrokenLowToday = true; // Mark to prevent duplicate signals
+      state.hasBrokenLowToday = true;
       this.on_sell_signal(data.symbol, ltp, dayLow, prevLtp);
       return;
     }
