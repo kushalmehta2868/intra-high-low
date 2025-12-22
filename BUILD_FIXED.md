@@ -1,16 +1,30 @@
 # ✅ Build Fixed - Ready for Deployment
 
-## Latest Update: Market Hours Control
+## Latest Updates
+
+### 1. Market Hours Control ⏰
 
 **NEW FEATURE:** Bot now only fetches market data during market hours (9:15 AM - 3:30 PM IST)
 
-### Benefits
+**Benefits:**
 - 74% reduction in API calls (no wasted calls outside market hours)
 - Better resource efficiency on cloud platforms
 - Cleaner logs with no unnecessary warnings
 - Automatic start/stop based on market hours
 
 See [MARKET_HOURS_CONTROL.md](MARKET_HOURS_CONTROL.md) for complete documentation.
+
+### 2. Timezone Fix for Render 🌍
+
+**CRITICAL FIX:** Scheduler now uses IST timezone, works correctly on Render (UTC servers)
+
+**Benefits:**
+- Market opens/closes at correct IST times on Render
+- No more UTC/IST confusion
+- Works on any cloud platform (AWS, Azure, GCP, Render)
+- Automatic timezone conversion built-in
+
+See [TIMEZONE_FIX.md](TIMEZONE_FIX.md) for complete documentation.
 
 ---
 

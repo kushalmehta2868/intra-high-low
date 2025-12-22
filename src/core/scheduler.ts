@@ -10,6 +10,7 @@ export class MarketScheduler extends EventEmitter {
   private marketEndJob: cron.ScheduledTask | null = null;
   private squareOffJob: cron.ScheduledTask | null = null;
   private priceUpdateJob: cron.ScheduledTask | null = null;
+  private readonly IST_TIMEZONE = 'Asia/Kolkata';
 
   constructor(marketStartTime: string, marketEndTime: string, autoSquareOffTime: string) {
     super();
@@ -24,10 +25,21 @@ export class MarketScheduler extends EventEmitter {
     this.scheduleAutoSquareOff();
     this.schedulePriceUpdates();
 
+    // Get current time in IST for logging
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const currentIstTime = istTime.toLocaleString('en-IN', {
+      timeZone: this.IST_TIMEZONE,
+      hour12: false
+    });
+
     logger.info('Market scheduler started', {
-      marketStartTime: this.marketStartTime,
-      marketEndTime: this.marketEndTime,
-      autoSquareOffTime: this.autoSquareOffTime
+      timezone: this.IST_TIMEZONE,
+      currentISTTime: currentIstTime,
+      marketStartTime: `${this.marketStartTime} IST`,
+      marketEndTime: `${this.marketEndTime} IST`,
+      autoSquareOffTime: `${this.autoSquareOffTime} IST`,
+      isMarketHours: this.isMarketHours()
     });
 
     this.emit('scheduler_started');
@@ -40,6 +52,8 @@ export class MarketScheduler extends EventEmitter {
     this.marketStartJob = cron.schedule(cronExpression, () => {
       logger.info('Market opened');
       this.emit('market_open');
+    }, {
+      timezone: this.IST_TIMEZONE
     });
   }
 
@@ -50,6 +64,8 @@ export class MarketScheduler extends EventEmitter {
     this.marketEndJob = cron.schedule(cronExpression, () => {
       logger.info('Market closed');
       this.emit('market_close');
+    }, {
+      timezone: this.IST_TIMEZONE
     });
   }
 
@@ -60,6 +76,8 @@ export class MarketScheduler extends EventEmitter {
     this.squareOffJob = cron.schedule(cronExpression, () => {
       logger.info('Auto square-off time reached');
       this.emit('auto_square_off');
+    }, {
+      timezone: this.IST_TIMEZONE
     });
   }
 
@@ -72,21 +90,26 @@ export class MarketScheduler extends EventEmitter {
   }
 
   public isMarketHours(): boolean {
+    // Get current time in IST
     const now = new Date();
-    const day = now.getDay();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const day = istTime.getDay();
 
+    // Weekend check (Saturday = 6, Sunday = 0)
     if (day === 0 || day === 6) {
       return false;
     }
 
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
 
     return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
   }
 
   public isAfterSquareOffTime(): boolean {
+    // Get current time in IST
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
 
     return currentTime >= this.autoSquareOffTime;
   }
