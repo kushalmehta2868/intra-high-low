@@ -115,7 +115,7 @@ export class MarketDataFetcher extends EventEmitter {
       const tokens = Array.from(tokensMap.values());
 
       if (tokens.length === 0) {
-        logger.warn('No symbol tokens available for market data fetch');
+        logger.debug('Symbol tokens not yet loaded, skipping this fetch cycle');
         return;
       }
 

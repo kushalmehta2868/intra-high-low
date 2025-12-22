@@ -1,5 +1,19 @@
 # ✅ Build Fixed - Ready for Deployment
 
+## Latest Update: Market Hours Control
+
+**NEW FEATURE:** Bot now only fetches market data during market hours (9:15 AM - 3:30 PM IST)
+
+### Benefits
+- 74% reduction in API calls (no wasted calls outside market hours)
+- Better resource efficiency on cloud platforms
+- Cleaner logs with no unnecessary warnings
+- Automatic start/stop based on market hours
+
+See [MARKET_HOURS_CONTROL.md](MARKET_HOURS_CONTROL.md) for complete documentation.
+
+---
+
 ## What Was Fixed
 
 ### TypeScript Build Error

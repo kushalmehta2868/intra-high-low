@@ -76,6 +76,7 @@ export class SymbolTokenService {
 
       if (!response.data || !Array.isArray(response.data)) {
         logger.error('Invalid master data response from Angel One');
+        this.loadFallbackTokens();
         return;
       }
 
@@ -94,6 +95,15 @@ export class SymbolTokenService {
             equityCount++;
           }
         }
+      }
+
+      // If no equities were found, API response structure might have changed
+      // Use fallback tokens instead
+      if (equityCount === 0) {
+        logger.warn('⚠️  No equity symbols found in master data - API structure may have changed');
+        logger.debug('First item from API response:', response.data[0]);
+        this.loadFallbackTokens();
+        return;
       }
 
       this.lastFetchTime = Date.now();
@@ -156,7 +166,10 @@ export class SymbolTokenService {
       this.symbolTokenCache.set(symbol, token);
     }
 
-    logger.info('Fallback tokens loaded', {
+    // Set lastFetchTime to prevent continuous retry attempts
+    this.lastFetchTime = Date.now();
+
+    logger.info('✅ Fallback tokens loaded', {
       count: Object.keys(fallbackTokens).length
     });
   }

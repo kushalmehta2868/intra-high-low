@@ -132,14 +132,26 @@ export class TradingEngine extends EventEmitter {
       );
     });
 
-    this.scheduler.on('market_open', () => {
-      logger.info('Market opened - starting strategies');
-      this.startStrategies();
+    this.scheduler.on('market_open', async () => {
+      logger.info('🟢 Market opened - starting strategies and market data');
+
+      // Start market data fetching (Paper mode only)
+      if (this.config.trading.mode === TradingMode.PAPER) {
+        await (this.broker as any).startMarketDataFetching?.();
+      }
+
+      await this.startStrategies();
     });
 
     this.scheduler.on('market_close', async () => {
-      logger.info('Market closed - stopping strategies');
+      logger.info('🔴 Market closed - stopping strategies and market data');
+
       await this.stopStrategies();
+
+      // Stop market data fetching (Paper mode only)
+      if (this.config.trading.mode === TradingMode.PAPER) {
+        (this.broker as any).stopMarketDataFetching?.();
+      }
     });
 
     this.scheduler.on('auto_square_off', async () => {
@@ -379,8 +391,20 @@ export class TradingEngine extends EventEmitter {
 
     this.isRunning = true;
 
+    // If starting during market hours, start market data fetching immediately
+    if (this.scheduler.isMarketHours() && this.config.trading.mode === TradingMode.PAPER) {
+      logger.info('⏰ Bot started during market hours - starting market data fetching immediately');
+      await (this.broker as any).startMarketDataFetching?.();
+      await this.startStrategies();
+    } else {
+      logger.info('⏰ Bot started outside market hours - will wait for market open');
+    }
+
     await this.telegramBot.sendMessage(
-      `🚀 *Trading Engine Started*\n\nMode: ${this.config.trading.mode}\nBalance: ₹${this.initialBalance.toFixed(2)}`
+      `🚀 *Trading Engine Started*\n\nMode: ${this.config.trading.mode}\nBalance: ₹${this.initialBalance.toFixed(2)}\n\n` +
+      (this.scheduler.isMarketHours()
+        ? '🟢 Market is OPEN - trading active'
+        : '🔴 Market is CLOSED - waiting for market open')
     );
 
     logger.info('Trading engine started successfully');
