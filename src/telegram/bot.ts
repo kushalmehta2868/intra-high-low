@@ -80,17 +80,44 @@ ${message}
     symbol: string,
     quantity: number,
     price: number,
-    reason?: string
+    reason?: string,
+    stopLoss?: number,
+    target?: number
   ): Promise<void> {
     const emoji = action === 'BUY' ? '🟢' : '🔴';
-    const message = `
-${emoji} *${action} ORDER*
+    const orderValue = quantity * price;
 
-Symbol: \`${symbol}\`
-Quantity: ${quantity}
-Price: ₹${price.toFixed(2)}
-${reason ? `Reason: ${reason}` : ''}
-    `;
+    let message = `${emoji} *${action} ORDER EXECUTED*\n\n`;
+    message += `*Symbol:* \`${symbol}\`\n`;
+    message += `*Quantity:* ${quantity}\n`;
+    message += `*Entry Price:* ₹${price.toFixed(2)}\n`;
+    message += `*Order Value:* ₹${orderValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+
+    if (stopLoss) {
+      const slDiff = Math.abs(price - stopLoss);
+      const slPercent = ((slDiff / price) * 100).toFixed(2);
+      message += `\n*Stop Loss:* ₹${stopLoss.toFixed(2)} (${slPercent}% risk)\n`;
+    }
+
+    if (target) {
+      const targetDiff = Math.abs(target - price);
+      const targetPercent = ((targetDiff / price) * 100).toFixed(2);
+      message += `*Target:* ₹${target.toFixed(2)} (${targetPercent}% gain)\n`;
+    }
+
+    if (stopLoss && target) {
+      const riskAmount = Math.abs(price - stopLoss) * quantity;
+      const rewardAmount = Math.abs(target - price) * quantity;
+      const riskRewardRatio = (rewardAmount / riskAmount).toFixed(2);
+      message += `\n*Risk:Reward* = 1:${riskRewardRatio}\n`;
+      message += `*Max Risk:* ₹${riskAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+      message += `*Max Reward:* ₹${rewardAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    }
+
+    if (reason) {
+      message += `\n📝 *Reason:* ${reason}`;
+    }
+
     await this.sendMessage(message);
   }
 
@@ -103,12 +130,19 @@ ${reason ? `Reason: ${reason}` : ''}
     const emoji = pnl >= 0 ? '✅' : '❌';
     const statusEmoji = status === 'OPENED' ? '📈' : '📉';
 
-    const message = `
-${statusEmoji} *POSITION ${status}*
+    let message = `${statusEmoji} *POSITION ${status}*\n\n`;
+    message += `*Symbol:* \`${symbol}\`\n`;
 
-Symbol: \`${symbol}\`
-${status === 'CLOSED' ? `${emoji} P&L: ₹${pnl.toFixed(2)} (${pnlPercent.toFixed(2)}%)` : ''}
-    `;
+    if (status === 'CLOSED') {
+      message += `\n${emoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
+
+      if (pnl >= 0) {
+        message += `\n🎯 *Profit Trade*`;
+      } else {
+        message += `\n⚠️ *Loss Trade*`;
+      }
+    }
+
     await this.sendMessage(message);
   }
 
@@ -117,55 +151,69 @@ ${status === 'CLOSED' ? `${emoji} P&L: ₹${pnl.toFixed(2)} (${pnlPercent.toFixe
   }
 
   public async sendStatusReport(status: any): Promise<void> {
-    const message = `
-*📊 Trading Bot Status*
+    const killSwitchStatus = status.killSwitch ? '🔴 ACTIVE (Trading Disabled)' : '🟢 INACTIVE';
+    const pnlEmoji = status.totalPnL >= 0 ? '📈' : '📉';
 
-Mode: \`${status.mode}\`
-Kill Switch: ${status.killSwitch ? '🔴 ACTIVE' : '🟢 INACTIVE'}
-Positions: ${status.positionCount}
-Balance: ₹${status.balance.toFixed(2)}
-Total P&L: ₹${status.totalPnL.toFixed(2)}
-    `;
+    let message = `📊 *TRADING BOT STATUS*\n\n`;
+    message += `*Mode:* \`${status.mode}\`\n`;
+    message += `*Kill Switch:* ${killSwitchStatus}\n`;
+    message += `*Open Positions:* ${status.positionCount}\n`;
+    message += `*Account Balance:* ₹${status.balance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    message += `${pnlEmoji} *Total P&L:* ₹${status.totalPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
     await this.sendMessage(message);
   }
 
   public async sendPositionsReport(positions: any[]): Promise<void> {
     if (positions.length === 0) {
-      await this.sendMessage('*No open positions*');
+      await this.sendMessage('📊 *OPEN POSITIONS*\n\n❌ No open positions');
       return;
     }
 
-    let message = '*📈 Open Positions*\n\n';
+    let totalPnL = 0;
+    let message = `📊 *OPEN POSITIONS (${positions.length})*\n\n`;
 
-    for (const pos of positions) {
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i];
       const emoji = pos.pnl >= 0 ? '✅' : '❌';
-      message += `
-${emoji} ${pos.symbol}
-Type: ${pos.type}
-Qty: ${pos.quantity}
-Entry: ₹${pos.entryPrice.toFixed(2)}
-Current: ₹${pos.currentPrice.toFixed(2)}
-P&L: ₹${pos.pnl.toFixed(2)} (${pos.pnlPercent.toFixed(2)}%)
----
-      `;
+      totalPnL += pos.pnl;
+
+      message += `${i + 1}. ${emoji} *${pos.symbol}*\n`;
+      message += `   *Type:* ${pos.type}\n`;
+      message += `   *Qty:* ${pos.quantity}\n`;
+      message += `   *Entry:* ₹${pos.entryPrice.toFixed(2)}\n`;
+      message += `   *Current:* ₹${pos.currentPrice.toFixed(2)}\n`;
+      message += `   *P&L:* ₹${pos.pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pos.pnlPercent >= 0 ? '+' : ''}${pos.pnlPercent.toFixed(2)}%)\n`;
+
+      if (pos.stopLoss) {
+        message += `   *SL:* ₹${pos.stopLoss.toFixed(2)}\n`;
+      }
+      if (pos.target) {
+        message += `   *Target:* ₹${pos.target.toFixed(2)}\n`;
+      }
+
+      message += `\n`;
     }
+
+    message += `───────────────────\n`;
+    message += `*Total P&L:* ₹${totalPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
     await this.sendMessage(message);
   }
 
   public async sendPnLReport(pnl: any): Promise<void> {
-    const emoji = pnl.total >= 0 ? '✅' : '❌';
-    const message = `
-*💰 P&L Summary*
+    const emoji = pnl.total >= 0 ? '📈' : '📉';
+    const returnEmoji = pnl.returnPercent >= 0 ? '✅' : '❌';
 
-${emoji} Total P&L: ₹${pnl.total.toFixed(2)}
-Starting Balance: ₹${pnl.startingBalance.toFixed(2)}
-Current Balance: ₹${pnl.currentBalance.toFixed(2)}
-Return: ${pnl.returnPercent.toFixed(2)}%
+    let message = `💰 *P&L SUMMARY*\n\n`;
+    message += `${emoji} *Total P&L:* ₹${pnl.total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+    message += `*Starting Balance:* ₹${pnl.startingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    message += `*Current Balance:* ₹${pnl.currentBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    message += `${returnEmoji} *Return:* ${pnl.returnPercent >= 0 ? '+' : ''}${pnl.returnPercent.toFixed(2)}%\n\n`;
+    message += `───────────────────\n\n`;
+    message += `*Today's P&L:* ₹${pnl.dailyPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    message += `*Trades Executed:* ${pnl.tradesExecutedToday}`;
 
-Today's P&L: ₹${pnl.dailyPnL.toFixed(2)}
-Trades Today: ${pnl.tradesExecutedToday}
-    `;
     await this.sendMessage(message);
   }
 

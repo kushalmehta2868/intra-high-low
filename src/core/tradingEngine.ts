@@ -287,7 +287,9 @@ export class TradingEngine extends EventEmitter {
             signal.symbol,
             quantity,
             currentPrice,
-            signal.reason
+            signal.reason,
+            stopLoss,
+            signal.target
           );
 
           logger.audit('SIGNAL_EXECUTED', { signal, order });

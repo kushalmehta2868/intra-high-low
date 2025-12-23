@@ -401,23 +401,38 @@ export class PaperBroker extends BaseBroker {
     // Update account balance
     this.accountBalance += pnl;
 
+    // Create closed position event for PositionManager
+    const closedPosition: Position = {
+      ...position,
+      quantity: 0,
+      currentPrice: exitPrice,
+      pnl: pnl,
+      pnlPercent: (pnl / (position.entryPrice * position.quantity)) * 100
+    };
+
     // Remove position
     this.positions.delete(symbol);
+
+    // Emit position_update so PositionManager can track closure
+    this.emitPositionUpdate(closedPosition);
 
     // Send Telegram notification
     if (this.telegramBot) {
       const emoji = exitReason === 'TARGET' ? '🎯' : '🛑';
       const action = exitSide === OrderSide.SELL ? 'SELL' : 'BUY';
+      const pnlPercent = ((pnl / (position.entryPrice * position.quantity)) * 100);
+      const pnlEmoji = pnl >= 0 ? '✅' : '❌';
 
       let message = `${emoji} *BRACKET ORDER AUTO-EXIT*\n\n`;
-      message += `${action} ${symbol}\n\n`;
-      message += `📊 *Exit Details:*\n`;
-      message += `• Reason: ${exitReason === 'TARGET' ? 'Target Reached' : 'Stop-Loss Hit'}\n`;
-      message += `• Entry Price: ₹${position.entryPrice.toFixed(2)}\n`;
-      message += `• Exit Price: ₹${exitPrice.toFixed(2)}\n`;
-      message += `• Quantity: ${position.quantity}\n`;
-      message += `• P&L: ${pnl >= 0 ? '📈' : '📉'} ₹${pnl.toFixed(2)} (${((pnl / (position.entryPrice * position.quantity)) * 100).toFixed(2)}%)\n`;
-      message += `\n⚡ *Executed automatically by bracket order*`;
+      message += `*Action:* ${action}\n`;
+      message += `*Symbol:* \`${symbol}\`\n`;
+      message += `*Reason:* ${exitReason === 'TARGET' ? '🎯 Target Reached' : '🛑 Stop-Loss Hit'}\n\n`;
+      message += `*Entry Price:* ₹${position.entryPrice.toFixed(2)}\n`;
+      message += `*Exit Price:* ₹${exitPrice.toFixed(2)}\n`;
+      message += `*Quantity:* ${position.quantity}\n`;
+      message += `*Order Value:* ₹${(exitPrice * position.quantity).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+      message += `${pnlEmoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n\n`;
+      message += `⚡ *Executed automatically by bracket order*`;
 
       await this.telegramBot.sendMessage(message);
     }
