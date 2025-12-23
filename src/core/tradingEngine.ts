@@ -219,13 +219,13 @@ export class TradingEngine extends EventEmitter {
 
         const stopLoss = signal.stopLoss || currentPrice * 0.98;
 
-        // Calculate quantity with ₹15,000 max capital requirement (after margin)
+        // Calculate quantity with ₹10,000 max capital requirement (after margin)
         let quantity = signal.quantity;
         if (!quantity) {
-          const MAX_CAPITAL_REQUIRED = 15000; // Maximum capital required in INR (after margin)
+          const MAX_CAPITAL_REQUIRED = 10000; // Maximum capital required in INR (after margin)
           const marginMultiplier = signal.marginMultiplier || 5;
 
-          // Calculate max quantity based on ₹15,000 capital limit
+          // Calculate max quantity based on ₹10,000 capital limit
           // Required capital = (quantity × price) / marginMultiplier
           // So: quantity = (MAX_CAPITAL × marginMultiplier) / price
           const maxQuantityByCapital = Math.floor((MAX_CAPITAL_REQUIRED * marginMultiplier) / currentPrice);
@@ -256,6 +256,11 @@ export class TradingEngine extends EventEmitter {
           logger.warn('Calculated quantity is 0', { signal });
           return;
         }
+
+        // CRITICAL FIX: Update risk manager with current balance BEFORE risk check
+        // This ensures balance checking works correctly in both PAPER and REAL modes
+        const currentBalance = await this.broker.getAccountBalance();
+        this.riskManager.updateBalance(currentBalance);
 
         const riskCheck = this.riskManager.checkOrderRisk(
           signal.symbol,
