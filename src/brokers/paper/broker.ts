@@ -516,12 +516,9 @@ export class PaperBroker extends BaseBroker {
       this.positions.set(order.symbol, newPosition);
       this.emitPositionUpdate(newPosition);
 
-      const cost = fillPrice * order.quantity;
-      if (order.side === OrderSide.BUY) {
-        this.accountBalance -= cost;
-      } else {
-        this.accountBalance += cost;
-      }
+      // Note: In paper trading, balance doesn't change when opening positions
+      // Balance only changes when positions are closed based on P&L
+      // This simulates real margin trading where you don't "spend" the full amount upfront
 
       // Simulate bracket order behavior - set up auto-exit monitoring
       if (order.stopPrice || order.target) {
