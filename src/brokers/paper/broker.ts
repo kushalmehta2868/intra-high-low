@@ -289,6 +289,155 @@ export class PaperBroker extends BaseBroker {
     return `PAPER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
 
+  /**
+   * Set up bracket order monitoring - simulates automatic exit on stop-loss or target hit
+   */
+  private setupBracketOrderMonitoring(symbol: string, position: Position): void {
+    // Check every second for exit conditions (simulating exchange-level monitoring)
+    const monitoringInterval = setInterval(async () => {
+      const currentPosition = this.positions.get(symbol);
+
+      // Stop monitoring if position is closed
+      if (!currentPosition || currentPosition.quantity === 0) {
+        clearInterval(monitoringInterval);
+        return;
+      }
+
+      // Get current price
+      const currentPrice = await this.getRealLTP(symbol);
+      if (!currentPrice) return;
+
+      // Update position price
+      currentPosition.currentPrice = currentPrice;
+
+      // Check stop-loss hit
+      if (position.stopLoss) {
+        const stopLossHit = position.type === PositionType.LONG
+          ? currentPrice <= position.stopLoss
+          : currentPrice >= position.stopLoss;
+
+        if (stopLossHit) {
+          clearInterval(monitoringInterval);
+          logger.info('🛑 BRACKET ORDER: Stop-loss triggered automatically', {
+            symbol,
+            type: 'STOP_LOSS',
+            triggerPrice: `₹${position.stopLoss.toFixed(2)}`,
+            currentPrice: `₹${currentPrice.toFixed(2)}`,
+            note: 'Simulating exchange-level auto-exit'
+          });
+          await this.executeAutomaticExit(symbol, currentPosition, currentPrice, 'STOP_LOSS');
+          return;
+        }
+      }
+
+      // Check target hit
+      if (position.target) {
+        const targetHit = position.type === PositionType.LONG
+          ? currentPrice >= position.target
+          : currentPrice <= position.target;
+
+        if (targetHit) {
+          clearInterval(monitoringInterval);
+          logger.info('🎯 BRACKET ORDER: Target reached automatically', {
+            symbol,
+            type: 'TARGET',
+            triggerPrice: `₹${position.target.toFixed(2)}`,
+            currentPrice: `₹${currentPrice.toFixed(2)}`,
+            note: 'Simulating exchange-level auto-exit'
+          });
+          await this.executeAutomaticExit(symbol, currentPosition, currentPrice, 'TARGET');
+          return;
+        }
+      }
+    }, 1000); // Check every second
+
+    logger.info('✅ BRACKET ORDER monitoring activated', {
+      symbol,
+      stopLoss: position.stopLoss ? `₹${position.stopLoss.toFixed(2)}` : 'N/A',
+      target: position.target ? `₹${position.target.toFixed(2)}` : 'N/A',
+      note: 'Will auto-exit when stop-loss or target is hit'
+    });
+  }
+
+  /**
+   * Execute automatic exit for bracket order
+   */
+  private async executeAutomaticExit(
+    symbol: string,
+    position: Position,
+    exitPrice: number,
+    exitReason: 'STOP_LOSS' | 'TARGET'
+  ): Promise<void> {
+    // Create exit order
+    const exitSide = position.type === PositionType.LONG ? OrderSide.SELL : OrderSide.BUY;
+    const orderId = this.generateOrderId();
+
+    const exitOrder: SimulatedOrder = {
+      orderId,
+      symbol,
+      side: exitSide,
+      type: OrderType.MARKET,
+      quantity: position.quantity,
+      price: undefined,
+      stopPrice: undefined,
+      status: OrderStatus.FILLED,
+      filledQuantity: position.quantity,
+      averagePrice: exitPrice,
+      timestamp: new Date(),
+      submittedAt: new Date(),
+      broker: 'Paper',
+      target: undefined
+    };
+
+    // Calculate P&L
+    const pnl = position.type === PositionType.LONG
+      ? (exitPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - exitPrice) * position.quantity;
+
+    // Update account balance
+    this.accountBalance += pnl;
+
+    // Remove position
+    this.positions.delete(symbol);
+
+    // Send Telegram notification
+    if (this.telegramBot) {
+      const emoji = exitReason === 'TARGET' ? '🎯' : '🛑';
+      const action = exitSide === OrderSide.SELL ? 'SELL' : 'BUY';
+
+      let message = `${emoji} *BRACKET ORDER AUTO-EXIT*\n\n`;
+      message += `${action} ${symbol}\n\n`;
+      message += `📊 *Exit Details:*\n`;
+      message += `• Reason: ${exitReason === 'TARGET' ? 'Target Reached' : 'Stop-Loss Hit'}\n`;
+      message += `• Entry Price: ₹${position.entryPrice.toFixed(2)}\n`;
+      message += `• Exit Price: ₹${exitPrice.toFixed(2)}\n`;
+      message += `• Quantity: ${position.quantity}\n`;
+      message += `• P&L: ${pnl >= 0 ? '📈' : '📉'} ₹${pnl.toFixed(2)} (${((pnl / (position.entryPrice * position.quantity)) * 100).toFixed(2)}%)\n`;
+      message += `\n⚡ *Executed automatically by bracket order*`;
+
+      await this.telegramBot.sendMessage(message);
+    }
+
+    logger.info('✅ Bracket order exit completed', {
+      symbol,
+      exitReason,
+      entryPrice: `₹${position.entryPrice.toFixed(2)}`,
+      exitPrice: `₹${exitPrice.toFixed(2)}`,
+      quantity: position.quantity,
+      pnl: `₹${pnl.toFixed(2)}`,
+      pnlPercent: `${((pnl / (position.entryPrice * position.quantity)) * 100).toFixed(2)}%`
+    });
+
+    logger.audit('BRACKET_ORDER_EXIT', {
+      symbol,
+      exitReason,
+      entryPrice: position.entryPrice,
+      exitPrice,
+      quantity: position.quantity,
+      pnl
+    });
+  }
+
   private simulateOrderExecution(orderId: string, executionPrice: number): void {
     const order = this.orders.get(orderId);
     if (!order) return;
@@ -353,6 +502,11 @@ export class PaperBroker extends BaseBroker {
         this.accountBalance -= cost;
       } else {
         this.accountBalance += cost;
+      }
+
+      // Simulate bracket order behavior - set up auto-exit monitoring
+      if (order.stopPrice || order.target) {
+        this.setupBracketOrderMonitoring(order.symbol, newPosition);
       }
     } else {
       if ((existingPosition.type === PositionType.LONG && order.side === OrderSide.SELL) ||

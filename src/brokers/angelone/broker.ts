@@ -75,8 +75,13 @@ export class AngelOneBroker extends BaseBroker {
         return null;
       }
 
+      // For bracket orders, Angel One requires variety='ROBO' and absolute trigger prices
+      // squareoff = target price (absolute)
+      // stoploss = stop-loss trigger price (absolute)
+      const useROBOOrder = (stopPrice || target) && type === OrderType.MARKET;
+
       const orderRequest = {
-        variety: 'NORMAL',
+        variety: useROBOOrder ? 'ROBO' : 'NORMAL',
         tradingsymbol: symbol,
         symboltoken: symbolToken,
         transactiontype: side,
@@ -85,7 +90,7 @@ export class AngelOneBroker extends BaseBroker {
         producttype: 'INTRADAY' as const,
         duration: 'DAY' as const,
         price: price ? price.toFixed(2) : '0',
-        squareoff: '0',
+        squareoff: target ? target.toFixed(2) : '0',
         stoploss: stopPrice ? stopPrice.toFixed(2) : '0',
         quantity: quantity.toString()
       };
@@ -114,12 +119,24 @@ export class AngelOneBroker extends BaseBroker {
             stopLoss: stopPrice,
             target: target
           });
-          logger.info('Order placed with stopLoss and target', {
-            orderId,
-            symbol,
-            stopLoss: stopPrice,
-            target
-          });
+
+          if (useROBOOrder) {
+            logger.info('✅ BRACKET Order placed with built-in exits', {
+              orderId,
+              symbol,
+              orderType: 'ROBO (Bracket)',
+              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : 'N/A',
+              target: target ? `₹${target.toFixed(2)}` : 'N/A',
+              note: 'Stop-loss and target will execute automatically'
+            });
+          } else {
+            logger.info('Order placed with exit levels (manual monitoring)', {
+              orderId,
+              symbol,
+              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : 'N/A',
+              target: target ? `₹${target.toFixed(2)}` : 'N/A'
+            });
+          }
         }
 
         this.emitOrderUpdate(order);

@@ -218,7 +218,39 @@ export class TradingEngine extends EventEmitter {
         }
 
         const stopLoss = signal.stopLoss || currentPrice * 0.98;
-        const quantity = signal.quantity || this.riskManager.calculatePositionSize(currentPrice, stopLoss);
+
+        // Calculate quantity with ₹15,000 max capital requirement (after margin)
+        let quantity = signal.quantity;
+        if (!quantity) {
+          const MAX_CAPITAL_REQUIRED = 15000; // Maximum capital required in INR (after margin)
+          const marginMultiplier = signal.marginMultiplier || 5;
+
+          // Calculate max quantity based on ₹15,000 capital limit
+          // Required capital = (quantity × price) / marginMultiplier
+          // So: quantity = (MAX_CAPITAL × marginMultiplier) / price
+          const maxQuantityByCapital = Math.floor((MAX_CAPITAL_REQUIRED * marginMultiplier) / currentPrice);
+
+          // Also calculate based on risk management
+          const riskBasedQuantity = this.riskManager.calculatePositionSize(currentPrice, stopLoss);
+
+          // Take the minimum to ensure we don't exceed either limit
+          quantity = Math.min(maxQuantityByCapital, riskBasedQuantity);
+
+          const orderValue = quantity * currentPrice;
+          const requiredCapital = orderValue / marginMultiplier;
+
+          logger.info('Quantity calculated', {
+            symbol: signal.symbol,
+            currentPrice: `₹${currentPrice.toFixed(2)}`,
+            marginMultiplier,
+            maxCapitalAllowed: `₹${MAX_CAPITAL_REQUIRED}`,
+            maxQuantityByCapital,
+            riskBasedQuantity,
+            finalQuantity: quantity,
+            orderValue: `₹${orderValue.toFixed(2)}`,
+            requiredCapital: `₹${requiredCapital.toFixed(2)}`
+          });
+        }
 
         if (quantity === 0) {
           logger.warn('Calculated quantity is 0', { signal });

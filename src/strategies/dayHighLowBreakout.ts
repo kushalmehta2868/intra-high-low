@@ -1,6 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, MarketData, StrategySignal, Position } from '../types';
 import { logger } from '../utils/logger';
+import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 
 interface SymbolState {
   // Current day OHLC
@@ -225,11 +226,15 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const stopLoss = ltp * (1 - 0.005); // 0.5% below
     const target = ltp * (1 + 0.0025);   // 0.25% above
 
+    // Get symbol-specific margin multiplier
+    const marginMultiplier = getSymbolMarginMultiplier(symbol);
+
     const signal: StrategySignal = {
       symbol,
       action: 'BUY',
       stopLoss,
       target,
+      marginMultiplier,
       reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)})`,
       confidence: 0.7
     };
@@ -266,11 +271,15 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const stopLoss = ltp * (1 + 0.005); // 0.5% above
     const target = ltp * (1 - 0.0025);   // 0.25% below
 
+    // Get symbol-specific margin multiplier
+    const marginMultiplier = getSymbolMarginMultiplier(symbol);
+
     const signal: StrategySignal = {
       symbol,
       action: 'SELL',
       stopLoss,
       target,
+      marginMultiplier,
       reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)})`,
       confidence: 0.7
     };

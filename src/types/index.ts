@@ -85,6 +85,7 @@ export interface StrategySignal {
   target?: number;
   reason: string;
   confidence?: number;
+  marginMultiplier?: number;  // Per-symbol margin multiplier (e.g., 5 for MIS stocks)
 }
 
 export interface MarketData {
