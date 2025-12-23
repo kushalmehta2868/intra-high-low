@@ -83,10 +83,22 @@ export class AngelOneClient {
     this.client.interceptors.response.use(
       (response) => response,
       async (error) => {
-        if (error.response?.status === 401) {
-          logger.warn('Token expired, attempting to refresh');
-          await this.login();
-          return this.client.request(error.config);
+        const originalRequest = error.config;
+
+        // Handle 401 (Unauthorized) or 403 (Forbidden) - both indicate auth issues
+        if ((error.response?.status === 401 || error.response?.status === 403) && !originalRequest._retry) {
+          originalRequest._retry = true; // Prevent infinite retry loop
+
+          logger.warn(`Authentication error (${error.response?.status}), attempting to re-login`);
+
+          const loginSuccess = await this.login();
+
+          if (loginSuccess) {
+            logger.info('Re-login successful, retrying request');
+            return this.client.request(originalRequest);
+          } else {
+            logger.error('Re-login failed, request cannot be retried');
+          }
         }
         return Promise.reject(error);
       }
