@@ -51,7 +51,10 @@ export class AngelOneBroker extends BaseBroker {
 
   public async disconnect(): Promise<void> {
     this.isConnected = false;
-    logger.info('Disconnected from Angel One broker');
+
+    // Clear position metadata on disconnect
+    this.positionMetadata.clear();
+    logger.info('Disconnected from Angel One broker - position metadata cleared');
   }
 
   public async placeOrder(

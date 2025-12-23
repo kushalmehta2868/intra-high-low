@@ -70,12 +70,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // Check and clear cooldown if period has elapsed
     this.checkCooldownExpiry(data.symbol, state);
 
-    // Set opening price on first data point
+    // Set opening price AND initialize high/low on first data point
     if (state.open === 0) {
-      state.open = data.open;
-      state.prevLtp = data.ltp; // Initialize prevLtp
-      logger.info(`📊 [${data.symbol}] Opening price set`, {
-        open: `₹${data.open.toFixed(2)}`
+      state.open = data.open || data.ltp;
+      state.dayHigh = data.high || data.ltp; // Initialize from real data, not 0
+      state.dayLow = data.low || data.ltp;   // Initialize from real data, not Infinity
+      state.prevLtp = data.ltp;
+      logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
+        open: `₹${state.open.toFixed(2)}`,
+        dayHigh: `₹${state.dayHigh.toFixed(2)}`,
+        dayLow: `₹${state.dayLow.toFixed(2)}`,
+        ltp: `₹${data.ltp.toFixed(2)}`
       });
     }
 

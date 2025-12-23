@@ -134,7 +134,11 @@ export class PaperBroker extends BaseBroker {
       await this.telegramBot.stop();
     }
 
-    logger.info('Disconnected from paper broker');
+    // Clear all data on disconnect
+    this.orders.clear();
+    this.positions.clear();
+
+    logger.info('Disconnected from paper broker - all positions and orders cleared');
     logger.audit('PAPER_BROKER_DISCONNECTED', {
       finalBalance: this.accountBalance,
       pnl: this.accountBalance - this.startingBalance
