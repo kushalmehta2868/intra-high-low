@@ -422,8 +422,16 @@ export class PaperBroker extends BaseBroker {
       const action = exitSide === OrderSide.SELL ? 'SELL' : 'BUY';
       const pnlPercent = ((pnl / (position.entryPrice * position.quantity)) * 100);
       const pnlEmoji = pnl >= 0 ? '✅' : '❌';
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
 
       let message = `${emoji} *BRACKET ORDER AUTO-EXIT*\n\n`;
+      message += `🕐 *Time:* ${timeStr}\n`;
       message += `*Action:* ${action}\n`;
       message += `*Symbol:* \`${symbol}\`\n`;
       message += `*Reason:* ${exitReason === 'TARGET' ? '🎯 Target Reached' : '🛑 Stop-Loss Hit'}\n\n`;
@@ -432,6 +440,11 @@ export class PaperBroker extends BaseBroker {
       message += `*Quantity:* ${position.quantity}\n`;
       message += `*Order Value:* ₹${(exitPrice * position.quantity).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
       message += `${pnlEmoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n\n`;
+
+      // Add current balance and open positions
+      message += `───────────────────\n`;
+      message += `*Account Balance:* ₹${this.accountBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+      message += `*Open Positions:* ${this.positions.size}\n\n`;
       message += `⚡ *Executed automatically by bracket order*`;
 
       await this.telegramBot.sendMessage(message);

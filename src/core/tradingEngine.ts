@@ -282,6 +282,11 @@ export class TradingEngine extends EventEmitter {
         );
 
         if (order) {
+          // Get current account balance and position count for telegram notification
+          const balance = await this.broker.getAccountBalance();
+          const positions = this.positionManager.getAllPositions();
+          const openPositionCount = positions.length;
+
           await this.telegramBot.sendTradeNotification(
             signal.action,
             signal.symbol,
@@ -289,7 +294,9 @@ export class TradingEngine extends EventEmitter {
             currentPrice,
             signal.reason,
             stopLoss,
-            signal.target
+            signal.target,
+            balance,
+            openPositionCount
           );
 
           logger.audit('SIGNAL_EXECUTED', { signal, order });
@@ -322,6 +329,9 @@ export class TradingEngine extends EventEmitter {
 
     const side = position.type === 'LONG' ? OrderSide.SELL : OrderSide.BUY;
 
+    // Get fresh LTP before placing close order
+    const currentPrice = await this.broker.getLTP(symbol) || position.currentPrice;
+
     const order = await this.broker.placeOrder(
       symbol,
       side,
@@ -335,7 +345,7 @@ export class TradingEngine extends EventEmitter {
         side,
         symbol,
         position.quantity,
-        position.currentPrice,
+        currentPrice,
         reason
       );
     }
@@ -366,6 +376,9 @@ export class TradingEngine extends EventEmitter {
   }
 
   private async sendStatusReport(): Promise<void> {
+    // Update market prices BEFORE fetching positions/PnL to ensure fresh data
+    await this.positionManager.updateMarketPrices();
+
     const balance = await this.broker.getAccountBalance();
     const positions = this.positionManager.getAllPositions();
     const totalPnL = this.positionManager.getTotalPnL();
@@ -380,6 +393,9 @@ export class TradingEngine extends EventEmitter {
   }
 
   private async sendPositionsReport(): Promise<void> {
+    // Update market prices BEFORE fetching positions to ensure fresh data
+    await this.positionManager.updateMarketPrices();
+
     const positions = this.positionManager.getAllPositions();
     await this.telegramBot.sendPositionsReport(positions);
   }

@@ -82,12 +82,22 @@ ${message}
     price: number,
     reason?: string,
     stopLoss?: number,
-    target?: number
+    target?: number,
+    accountBalance?: number,
+    openPositions?: number
   ): Promise<void> {
     const emoji = action === 'BUY' ? '🟢' : '🔴';
     const orderValue = quantity * price;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
 
     let message = `${emoji} *${action} ORDER EXECUTED*\n\n`;
+    message += `🕐 *Time:* ${timeStr}\n`;
     message += `*Symbol:* \`${symbol}\`\n`;
     message += `*Quantity:* ${quantity}\n`;
     message += `*Entry Price:* ₹${price.toFixed(2)}\n`;
@@ -112,6 +122,16 @@ ${message}
       message += `\n*Risk:Reward* = 1:${riskRewardRatio}\n`;
       message += `*Max Risk:* ₹${riskAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
       message += `*Max Reward:* ₹${rewardAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    }
+
+    if (accountBalance !== undefined || openPositions !== undefined) {
+      message += `\n───────────────────\n`;
+      if (accountBalance !== undefined) {
+        message += `*Account Balance:* ₹${accountBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+      }
+      if (openPositions !== undefined) {
+        message += `*Open Positions:* ${openPositions}\n`;
+      }
     }
 
     if (reason) {
