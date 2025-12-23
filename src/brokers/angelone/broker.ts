@@ -5,8 +5,14 @@ import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
 import { symbolTokenService } from '../../services/symbolTokenService';
 
+interface PositionMetadata {
+  stopLoss?: number;
+  target?: number;
+}
+
 export class AngelOneBroker extends BaseBroker {
   private client: AngelOneClient;
+  private positionMetadata: Map<string, PositionMetadata> = new Map();
 
   constructor(config: BrokerConfig) {
     super();
@@ -54,7 +60,8 @@ export class AngelOneBroker extends BaseBroker {
     type: OrderType,
     quantity: number,
     price?: number,
-    stopPrice?: number
+    stopPrice?: number,
+    target?: number
   ): Promise<Order | null> {
     if (!this.isConnected) {
       logger.error('Broker not connected');
@@ -100,6 +107,20 @@ export class AngelOneBroker extends BaseBroker {
           timestamp: new Date(),
           broker: 'AngelOne'
         };
+
+        // Store stopLoss and target metadata for this symbol
+        if (stopPrice || target) {
+          this.positionMetadata.set(symbol, {
+            stopLoss: stopPrice,
+            target: target
+          });
+          logger.info('Order placed with stopLoss and target', {
+            orderId,
+            symbol,
+            stopLoss: stopPrice,
+            target
+          });
+        }
 
         this.emitOrderUpdate(order);
         return order;
@@ -212,13 +233,19 @@ export class AngelOneBroker extends BaseBroker {
     const avgPrice = parseFloat(angelPos.netprice || angelPos.avgprice || '0');
     const ltp = parseFloat(angelPos.ltp || '0');
     const pnl = parseFloat(angelPos.pnl || '0');
+    const symbol = angelPos.tradingsymbol;
+
+    // Get stored metadata for this position
+    const metadata = this.positionMetadata.get(symbol);
 
     return {
-      symbol: angelPos.tradingsymbol,
+      symbol: symbol,
       type: quantity > 0 ? PositionType.LONG : PositionType.SHORT,
       quantity: Math.abs(quantity),
       entryPrice: avgPrice,
       currentPrice: ltp,
+      stopLoss: metadata?.stopLoss,
+      target: metadata?.target,
       pnl: pnl,
       pnlPercent: avgPrice !== 0 ? (pnl / (avgPrice * Math.abs(quantity))) * 100 : 0,
       entryTime: new Date()

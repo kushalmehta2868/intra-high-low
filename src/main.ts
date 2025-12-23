@@ -18,8 +18,6 @@ async function main() {
       marginMultiplier: config.trading.riskLimits.marginMultiplier
     });
 
-    const engine = new TradingEngine(config);
-
     const watchlist = [
       'RELIANCE-EQ',
       'TCS-EQ',
@@ -46,6 +44,8 @@ async function main() {
       'HDFCAMC-EQ',
       'HEROMOTOCO-EQ',
     ];
+
+    const engine = new TradingEngine(config, watchlist);
 
     const initialBalance = 1000000;
     const marginMultiplier = config.trading.riskLimits.marginMultiplier;

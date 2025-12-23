@@ -22,10 +22,12 @@ export class TradingEngine extends EventEmitter {
   private strategies: Map<string, IStrategy> = new Map();
   private isRunning: boolean = false;
   private initialBalance: number = 0;
+  private watchlist: string[] = [];
 
-  constructor(config: AppConfig) {
+  constructor(config: AppConfig, watchlist?: string[]) {
     super();
     this.config = config;
+    this.watchlist = watchlist || [];
 
     this.broker = this.initializeBroker();
     this.initialBalance = 1000000;
@@ -48,7 +50,8 @@ export class TradingEngine extends EventEmitter {
       return new PaperBroker(
         1000000,                    // Initial balance
         this.config.broker,         // Angel One config for real data
-        this.config.telegram        // Telegram config for signals
+        this.config.telegram,       // Telegram config for signals
+        this.watchlist              // Watchlist for market data fetching
       );
     } else {
       logger.info('Initializing REAL trading mode');
@@ -242,7 +245,8 @@ export class TradingEngine extends EventEmitter {
           OrderType.MARKET,
           quantity,
           undefined,
-          stopLoss
+          stopLoss,
+          signal.target
         );
 
         if (order) {

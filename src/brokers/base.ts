@@ -11,7 +11,8 @@ export interface IBroker extends EventEmitter {
     type: OrderType,
     quantity: number,
     price?: number,
-    stopPrice?: number
+    stopPrice?: number,
+    target?: number
   ): Promise<Order | null>;
 
   cancelOrder(orderId: string): Promise<boolean>;
@@ -39,7 +40,8 @@ export abstract class BaseBroker extends EventEmitter implements IBroker {
     type: OrderType,
     quantity: number,
     price?: number,
-    stopPrice?: number
+    stopPrice?: number,
+    target?: number
   ): Promise<Order | null>;
 
   abstract cancelOrder(orderId: string): Promise<boolean>;

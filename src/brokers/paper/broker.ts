@@ -9,6 +9,7 @@ import { symbolTokenService } from '../../services/symbolTokenService';
 
 interface SimulatedOrder extends Order {
   submittedAt: Date;
+  target?: number;
 }
 
 /**
@@ -29,7 +30,8 @@ export class PaperBroker extends BaseBroker {
   constructor(
     initialBalance: number = 1000000,
     angelConfig?: BrokerConfig,
-    telegramConfig?: TelegramConfig
+    telegramConfig?: TelegramConfig,
+    watchlist?: string[]
   ) {
     super();
     this.accountBalance = initialBalance;
@@ -43,6 +45,11 @@ export class PaperBroker extends BaseBroker {
     // Initialize Telegram bot for signal notifications
     if (telegramConfig) {
       this.telegramBot = new TradingTelegramBot(telegramConfig);
+    }
+
+    // Store watchlist for later use when creating MarketDataFetcher
+    if (watchlist && watchlist.length > 0) {
+      (this as any).watchlist = watchlist;
     }
   }
 
@@ -60,8 +67,9 @@ export class PaperBroker extends BaseBroker {
           await symbolTokenService.refreshCache();
           logger.info('✅ Symbol token cache refreshed');
 
-          // Initialize and start market data fetcher
-          this.marketDataFetcher = new MarketDataFetcher(this.angelClient);
+          // Initialize and start market data fetcher with watchlist
+          const watchlist = (this as any).watchlist;
+          this.marketDataFetcher = new MarketDataFetcher(this.angelClient, watchlist);
 
           // Forward market data events
           this.marketDataFetcher.on('market_data', (data: MarketData) => {
@@ -139,7 +147,8 @@ export class PaperBroker extends BaseBroker {
     type: OrderType,
     quantity: number,
     price?: number,
-    stopPrice?: number
+    stopPrice?: number,
+    target?: number
   ): Promise<Order | null> {
     if (!this.isConnected) {
       logger.error('Paper broker not connected');
@@ -165,7 +174,8 @@ export class PaperBroker extends BaseBroker {
         averagePrice: 0,
         timestamp: new Date(),
         submittedAt: new Date(),
-        broker: 'Paper'
+        broker: 'Paper',
+        target: target
       };
 
       this.orders.set(orderId, order);
@@ -201,7 +211,7 @@ export class PaperBroker extends BaseBroker {
   /**
    * Send trading signal to Telegram
    */
-  private async sendTelegramSignal(order: Order, currentPrice: number): Promise<void> {
+  private async sendTelegramSignal(order: SimulatedOrder, currentPrice: number): Promise<void> {
     if (!this.telegramBot) return;
 
     const action = order.side === OrderSide.BUY ? '🟢 BUY' : '🔴 SELL';
@@ -216,6 +226,10 @@ export class PaperBroker extends BaseBroker {
 
     if (order.stopPrice) {
       message += `• Stop Loss: ₹${order.stopPrice.toFixed(2)}\n`;
+    }
+
+    if (order.target) {
+      message += `• Target: ₹${order.target.toFixed(2)}\n`;
     }
 
     if (order.price && order.type === OrderType.LIMIT) {
@@ -328,7 +342,7 @@ export class PaperBroker extends BaseBroker {
         pnlPercent: 0,
         entryTime: new Date(),
         stopLoss: order.stopPrice,
-        target: order.price && order.type === OrderType.LIMIT ? order.price : undefined
+        target: order.target
       };
 
       this.positions.set(order.symbol, newPosition);
