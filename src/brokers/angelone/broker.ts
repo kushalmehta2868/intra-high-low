@@ -1,9 +1,10 @@
 import { BaseBroker } from '../base';
 import { AngelOneClient } from './client';
-import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade } from '../../types';
+import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade, MarketData } from '../../types';
 import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
 import { symbolTokenService } from '../../services/symbolTokenService';
+import { MarketDataFetcher } from '../../services/marketDataFetcher';
 
 interface PositionMetadata {
   stopLoss?: number;
@@ -13,10 +14,13 @@ interface PositionMetadata {
 export class AngelOneBroker extends BaseBroker {
   private client: AngelOneClient;
   private positionMetadata: Map<string, PositionMetadata> = new Map();
+  private marketDataFetcher: MarketDataFetcher | null = null;
+  private watchlist: string[] = [];
 
-  constructor(config: BrokerConfig) {
+  constructor(config: BrokerConfig, watchlist?: string[]) {
     super();
     this.client = new AngelOneClient(config);
+    this.watchlist = watchlist || [];
   }
 
   /**
@@ -37,6 +41,25 @@ export class AngelOneBroker extends BaseBroker {
         // Refresh symbol token cache on connect
         await symbolTokenService.refreshCache();
         logger.info('Symbol token cache refreshed');
+
+        // Initialize market data fetcher for REAL mode
+        if (this.watchlist.length > 0) {
+          this.marketDataFetcher = new MarketDataFetcher(this.client, this.watchlist);
+
+          // Forward market data events from fetcher to broker listeners
+          this.marketDataFetcher.on('market_data', (data: MarketData) => {
+            this.emitMarketData(data);
+          });
+
+          // Start fetching market data
+          await this.marketDataFetcher.start();
+          logger.info('✅ Market data fetcher started for REAL mode', {
+            symbols: this.watchlist.length,
+            interval: '5 seconds'
+          });
+        } else {
+          logger.warn('⚠️ No watchlist provided - market data fetching disabled in REAL mode');
+        }
       } else {
         logger.error('Failed to connect to Angel One broker');
       }
@@ -51,6 +74,13 @@ export class AngelOneBroker extends BaseBroker {
 
   public async disconnect(): Promise<void> {
     this.isConnected = false;
+
+    // Stop market data fetcher
+    if (this.marketDataFetcher) {
+      await this.marketDataFetcher.stop();
+      this.marketDataFetcher = null;
+      logger.info('Market data fetcher stopped');
+    }
 
     // Clear position metadata on disconnect
     this.positionMetadata.clear();

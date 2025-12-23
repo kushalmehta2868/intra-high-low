@@ -55,7 +55,7 @@ export class TradingEngine extends EventEmitter {
       );
     } else {
       logger.info('Initializing REAL trading mode');
-      return new AngelOneBroker(this.config.broker);
+      return new AngelOneBroker(this.config.broker, this.watchlist);
     }
   }
 

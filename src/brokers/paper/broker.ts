@@ -27,6 +27,9 @@ export class PaperBroker extends BaseBroker {
   private telegramBot: TradingTelegramBot | null = null;
   private marketDataFetcher: MarketDataFetcher | null = null;
 
+  // Track monitoring intervals to prevent leaks and duplicate monitoring
+  private monitoringIntervals: Map<string, NodeJS.Timeout> = new Map();
+
   constructor(
     initialBalance: number = 1000000,
     angelConfig?: BrokerConfig,
@@ -138,7 +141,14 @@ export class PaperBroker extends BaseBroker {
     this.orders.clear();
     this.positions.clear();
 
-    logger.info('Disconnected from paper broker - all positions and orders cleared');
+    // FIXED: Clean up all monitoring intervals to prevent memory leaks
+    for (const [symbol, interval] of this.monitoringIntervals.entries()) {
+      clearInterval(interval);
+      logger.debug(`Cleaned up monitoring interval for ${symbol}`);
+    }
+    this.monitoringIntervals.clear();
+
+    logger.info('Disconnected from paper broker - all positions, orders, and monitoring cleared');
     logger.audit('PAPER_BROKER_DISCONNECTED', {
       finalBalance: this.accountBalance,
       pnl: this.accountBalance - this.startingBalance
@@ -297,6 +307,13 @@ export class PaperBroker extends BaseBroker {
    * Set up bracket order monitoring - simulates automatic exit on stop-loss or target hit
    */
   private setupBracketOrderMonitoring(symbol: string, position: Position): void {
+    // FIXED: Clear any existing monitoring interval for this symbol to prevent duplicate monitoring
+    const existingInterval = this.monitoringIntervals.get(symbol);
+    if (existingInterval) {
+      clearInterval(existingInterval);
+      logger.warn(`Clearing existing monitoring interval for ${symbol} (duplicate avoided)`);
+    }
+
     // Check every second for exit conditions (simulating exchange-level monitoring)
     const monitoringInterval = setInterval(async () => {
       const currentPosition = this.positions.get(symbol);
@@ -304,6 +321,8 @@ export class PaperBroker extends BaseBroker {
       // Stop monitoring if position is closed
       if (!currentPosition || currentPosition.quantity === 0) {
         clearInterval(monitoringInterval);
+        this.monitoringIntervals.delete(symbol);
+        logger.debug(`Monitoring stopped for ${symbol} - position closed`);
         return;
       }
 
@@ -322,6 +341,7 @@ export class PaperBroker extends BaseBroker {
 
         if (stopLossHit) {
           clearInterval(monitoringInterval);
+          this.monitoringIntervals.delete(symbol);
           logger.info('🛑 BRACKET ORDER: Stop-loss triggered automatically', {
             symbol,
             type: 'STOP_LOSS',
@@ -342,6 +362,7 @@ export class PaperBroker extends BaseBroker {
 
         if (targetHit) {
           clearInterval(monitoringInterval);
+          this.monitoringIntervals.delete(symbol);
           logger.info('🎯 BRACKET ORDER: Target reached automatically', {
             symbol,
             type: 'TARGET',
@@ -354,6 +375,9 @@ export class PaperBroker extends BaseBroker {
         }
       }
     }, 1000); // Check every second
+
+    // FIXED: Track this interval for cleanup
+    this.monitoringIntervals.set(symbol, monitoringInterval);
 
     logger.info('✅ BRACKET ORDER monitoring activated', {
       symbol,

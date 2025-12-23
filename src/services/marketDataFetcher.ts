@@ -167,8 +167,11 @@ export class MarketDataFetcher extends EventEmitter {
       const low = parseFloat(data.low);
       const ltp = parseFloat(data.ltp);
 
-      if (!ltp) {
-        logger.warn(`No price data for ${symbol}`);
+      // FIXED: Check for invalid prices (NaN or negative), not falsy values
+      // parseFloat("0.50") returns 0.5 which is truthy, but 0 is falsy
+      // This was incorrectly dropping valid low-price stocks
+      if (isNaN(ltp) || ltp < 0) {
+        logger.warn(`Invalid price data for ${symbol}`, { ltp: data.ltp });
         return;
       }
 
