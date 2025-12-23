@@ -5,6 +5,7 @@ import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
 import { symbolTokenService } from '../../services/symbolTokenService';
 import { MarketDataFetcher } from '../../services/marketDataFetcher';
+import { configManager } from '../../config';
 
 interface PositionMetadata {
   stopLoss?: number;
@@ -42,9 +43,19 @@ export class AngelOneBroker extends BaseBroker {
         await symbolTokenService.refreshCache();
         logger.info('Symbol token cache refreshed');
 
+        // Get market hours from config
+        const config = configManager.getConfig();
+        const marketStartTime = config.trading.marketStartTime;
+        const marketEndTime = config.trading.marketEndTime;
+
         // Initialize market data fetcher for REAL mode
         if (this.watchlist.length > 0) {
-          this.marketDataFetcher = new MarketDataFetcher(this.client, this.watchlist);
+          this.marketDataFetcher = new MarketDataFetcher(
+            this.client,
+            this.watchlist,
+            marketStartTime,
+            marketEndTime
+          );
 
           // Forward market data events from fetcher to broker listeners
           this.marketDataFetcher.on('market_data', (data: MarketData) => {

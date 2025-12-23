@@ -18,11 +18,16 @@ export class MarketDataFetcher extends EventEmitter {
   private isRunning: boolean = false;
   private fetchInterval: NodeJS.Timeout | null = null;
   private readonly FETCH_INTERVAL_MS = 5000; // Fetch every 5 seconds
+  private readonly IST_TIMEZONE = 'Asia/Kolkata';
+  private marketStartTime: string = '09:15';
+  private marketEndTime: string = '15:30';
 
-  constructor(client: AngelOneClient, watchlist: string[] = []) {
+  constructor(client: AngelOneClient, watchlist: string[] = [], marketStartTime?: string, marketEndTime?: string) {
     super();
     this.client = client;
     this.symbols = watchlist.length > 0 ? watchlist : this.getDefaultWatchlist();
+    if (marketStartTime) this.marketStartTime = marketStartTime;
+    if (marketEndTime) this.marketEndTime = marketEndTime;
     this.initializePriceTracking();
   }
 
@@ -108,7 +113,35 @@ export class MarketDataFetcher extends EventEmitter {
     logger.info('✅ Market data fetcher stopped');
   }
 
+  /**
+   * Check if current time is within market hours (IST timezone)
+   */
+  private isMarketHours(): boolean {
+    // Get current time in IST
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const day = istTime.getDay();
+
+    // Weekend check (Saturday = 6, Sunday = 0)
+    if (day === 0 || day === 6) {
+      return false;
+    }
+
+    const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
+
+    return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
+  }
+
   private async fetchAllMarketData(): Promise<void> {
+    // CRITICAL FIX: Don't fetch data outside market hours
+    if (!this.isMarketHours()) {
+      logger.debug('⏸️  Outside market hours - skipping data fetch', {
+        currentTime: new Date().toLocaleTimeString('en-IN', { timeZone: this.IST_TIMEZONE }),
+        marketHours: `${this.marketStartTime} - ${this.marketEndTime}`
+      });
+      return;
+    }
+
     try {
       // Get tokens for all symbols dynamically
       const tokensMap = await symbolTokenService.getTokens(this.symbols);

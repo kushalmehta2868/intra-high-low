@@ -6,6 +6,7 @@ import { TradingTelegramBot } from '../../telegram/bot';
 import { TelegramConfig } from '../../types';
 import { MarketDataFetcher } from '../../services/marketDataFetcher';
 import { symbolTokenService } from '../../services/symbolTokenService';
+import { configManager } from '../../config';
 
 interface SimulatedOrder extends Order {
   submittedAt: Date;
@@ -70,9 +71,19 @@ export class PaperBroker extends BaseBroker {
           await symbolTokenService.refreshCache();
           logger.info('✅ Symbol token cache refreshed');
 
-          // Initialize and start market data fetcher with watchlist
+          // Get market hours from config
+          const config = configManager.getConfig();
+          const marketStartTime = config.trading.marketStartTime;
+          const marketEndTime = config.trading.marketEndTime;
+
+          // Initialize and start market data fetcher with watchlist and market hours
           const watchlist = (this as any).watchlist;
-          this.marketDataFetcher = new MarketDataFetcher(this.angelClient, watchlist);
+          this.marketDataFetcher = new MarketDataFetcher(
+            this.angelClient,
+            watchlist,
+            marketStartTime,
+            marketEndTime
+          );
 
           // Forward market data events
           this.marketDataFetcher.on('market_data', (data: MarketData) => {
