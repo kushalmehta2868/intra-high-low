@@ -111,8 +111,10 @@ export interface RiskLimits {
 export interface TradingConfig {
   mode: TradingMode;
   autoSquareOffTime: string;
-  marketStartTime: string;
-  marketEndTime: string;
+  marketStartTime: string;     // Data fetching start time (9:15 AM)
+  marketEndTime: string;       // Data fetching end time (3:30 PM)
+  signalStartTime?: string;    // Signal generation start time (9:30 AM)
+  signalEndTime?: string;      // Signal generation end time (3:00 PM)
   killSwitch: boolean;
   riskLimits: RiskLimits;
 }

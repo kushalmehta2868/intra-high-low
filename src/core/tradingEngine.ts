@@ -45,7 +45,9 @@ export class TradingEngine extends EventEmitter {
     this.scheduler = new MarketScheduler(
       config.trading.marketStartTime,
       config.trading.marketEndTime,
-      config.trading.autoSquareOffTime
+      config.trading.autoSquareOffTime,
+      config.trading.signalStartTime,
+      config.trading.signalEndTime
     );
     this.telegramBot = new TradingTelegramBot(config.telegram);
 
@@ -229,6 +231,15 @@ export class TradingEngine extends EventEmitter {
 
     if (!this.scheduler.isMarketHours()) {
       logger.warn('Signal ignored - outside market hours', signal);
+      return;
+    }
+
+    // CRITICAL: Only generate signals during 9:30 AM - 3:00 PM
+    if (!this.scheduler.isSignalGenerationHours()) {
+      logger.info('Signal ignored - outside signal generation hours (9:30 AM - 3:00 PM)', {
+        symbol: signal.symbol,
+        action: signal.action
+      });
       return;
     }
 

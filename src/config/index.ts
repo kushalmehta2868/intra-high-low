@@ -29,6 +29,8 @@ class ConfigManager {
       autoSquareOffTime: process.env.AUTO_SQUARE_OFF_TIME || '15:20',
       marketStartTime: process.env.MARKET_START_TIME || '09:15',
       marketEndTime: process.env.MARKET_END_TIME || '15:30',
+      signalStartTime: process.env.SIGNAL_START_TIME || '09:30',
+      signalEndTime: process.env.SIGNAL_END_TIME || '15:00',
       killSwitch: process.env.KILL_SWITCH === 'true',
       riskLimits: {
         maxRiskPerTradePercent: parseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT || '2'),

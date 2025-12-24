@@ -3,20 +3,30 @@ import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 
 export class MarketScheduler extends EventEmitter {
-  private marketStartTime: string;
-  private marketEndTime: string;
+  private marketStartTime: string; // Data fetching starts (9:15 AM)
+  private marketEndTime: string;   // Data fetching ends (3:30 PM)
   private autoSquareOffTime: string;
+  private signalStartTime: string; // Signal generation starts (9:30 AM)
+  private signalEndTime: string;   // Signal generation ends (3:00 PM)
   private marketStartJob: cron.ScheduledTask | null = null;
   private marketEndJob: cron.ScheduledTask | null = null;
   private squareOffJob: cron.ScheduledTask | null = null;
   private priceUpdateJob: cron.ScheduledTask | null = null;
   private readonly IST_TIMEZONE = 'Asia/Kolkata';
 
-  constructor(marketStartTime: string, marketEndTime: string, autoSquareOffTime: string) {
+  constructor(
+    marketStartTime: string,
+    marketEndTime: string,
+    autoSquareOffTime: string,
+    signalStartTime: string = '09:30',
+    signalEndTime: string = '15:00'
+  ) {
     super();
     this.marketStartTime = marketStartTime;
     this.marketEndTime = marketEndTime;
     this.autoSquareOffTime = autoSquareOffTime;
+    this.signalStartTime = signalStartTime;
+    this.signalEndTime = signalEndTime;
   }
 
   public start(): void {
@@ -36,10 +46,11 @@ export class MarketScheduler extends EventEmitter {
     logger.info('Market scheduler started', {
       timezone: this.IST_TIMEZONE,
       currentISTTime: currentIstTime,
-      marketStartTime: `${this.marketStartTime} IST`,
-      marketEndTime: `${this.marketEndTime} IST`,
+      dataFetchingHours: `${this.marketStartTime} - ${this.marketEndTime} IST`,
+      signalGenerationHours: `${this.signalStartTime} - ${this.signalEndTime} IST`,
       autoSquareOffTime: `${this.autoSquareOffTime} IST`,
-      isMarketHours: this.isMarketHours()
+      isMarketHours: this.isMarketHours(),
+      isSignalHours: this.isSignalGenerationHours()
     });
 
     this.emit('scheduler_started');
@@ -90,7 +101,7 @@ export class MarketScheduler extends EventEmitter {
   }
 
   public isMarketHours(): boolean {
-    // Get current time in IST
+    // Check if market is open for DATA FETCHING (9:15 AM - 3:30 PM)
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
     const day = istTime.getDay();
@@ -103,6 +114,22 @@ export class MarketScheduler extends EventEmitter {
     const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
 
     return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
+  }
+
+  public isSignalGenerationHours(): boolean {
+    // Check if we should GENERATE SIGNALS (9:30 AM - 3:00 PM)
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const day = istTime.getDay();
+
+    // Weekend check (Saturday = 6, Sunday = 0)
+    if (day === 0 || day === 6) {
+      return false;
+    }
+
+    const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
+
+    return currentTime >= this.signalStartTime && currentTime <= this.signalEndTime;
   }
 
   public isAfterSquareOffTime(): boolean {
