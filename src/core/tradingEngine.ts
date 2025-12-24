@@ -69,10 +69,12 @@ export class TradingEngine extends EventEmitter {
       logger.info('Initializing PAPER trading mode with REAL data');
       // Paper mode uses real Angel One data but sends Telegram signals instead of orders
       return new PaperBroker(
-        1000000,                    // Initial balance
-        this.config.broker,         // Angel One config for real data
-        this.config.telegram,       // Telegram config for signals
-        this.watchlist              // Watchlist for market data fetching
+        1000000,                          // Initial balance
+        this.config.broker,               // Angel One config for real data
+        this.config.telegram,             // Telegram config for signals
+        this.watchlist,                   // Watchlist for market data fetching
+        this.config.trading.marketStartTime,  // Market start time for data control
+        this.config.trading.marketEndTime     // Market end time for data control
       );
     } else {
       logger.info('Initializing REAL trading mode');
@@ -190,7 +192,13 @@ export class TradingEngine extends EventEmitter {
     });
 
     this.scheduler.on('market_open', async () => {
-      logger.info('🟢 Market opened - starting strategies');
+      logger.info('🟢 Market opened - starting strategies and resetting daily data');
+
+      // Reset daily data for fresh start (Paper mode)
+      if (this.config.trading.mode === TradingMode.PAPER) {
+        (this.broker as any).resetDailyData?.();
+        logger.info('📅 Daily market data reset - starting fresh');
+      }
 
       // WebSocket already connected, just start strategies
       await this.startStrategies();

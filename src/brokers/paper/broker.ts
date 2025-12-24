@@ -31,11 +31,17 @@ export class PaperBroker extends BaseBroker {
   // Track monitoring intervals to prevent leaks and duplicate monitoring
   private monitoringIntervals: Map<string, NodeJS.Timeout> = new Map();
 
+  // Market hours configuration
+  private marketStartTime: string = '09:15';
+  private marketEndTime: string = '15:30';
+
   constructor(
     initialBalance: number = 1000000,
     angelConfig?: BrokerConfig,
     telegramConfig?: TelegramConfig,
-    watchlist?: string[]
+    watchlist?: string[],
+    marketStartTime?: string,
+    marketEndTime?: string
   ) {
     super();
     this.accountBalance = initialBalance;
@@ -55,6 +61,10 @@ export class PaperBroker extends BaseBroker {
     if (watchlist && watchlist.length > 0) {
       (this as any).watchlist = watchlist;
     }
+
+    // Store market hours configuration
+    if (marketStartTime) this.marketStartTime = marketStartTime;
+    if (marketEndTime) this.marketEndTime = marketEndTime;
   }
 
   public async connect(): Promise<boolean> {
@@ -71,8 +81,12 @@ export class PaperBroker extends BaseBroker {
           await symbolTokenService.refreshCache();
           logger.info('✅ Symbol token cache refreshed');
 
-          // Initialize WebSocket data feed for real-time market data
-          this.wsDataFeed = new WebSocketDataFeed(this.angelClient);
+          // Initialize WebSocket data feed for real-time market data with market hours
+          this.wsDataFeed = new WebSocketDataFeed(
+            this.angelClient,
+            this.marketStartTime,
+            this.marketEndTime
+          );
 
           // Forward market data events
           this.wsDataFeed.on('market_data', (data: MarketData) => {
@@ -716,5 +730,18 @@ export class PaperBroker extends BaseBroker {
       totalPnL: this.accountBalance - this.startingBalance,
       totalPnLPercent: ((this.accountBalance - this.startingBalance) / this.startingBalance) * 100
     };
+  }
+
+  /**
+   * Reset daily data for fresh start each trading day
+   * This clears OHLC data from previous day
+   */
+  public resetDailyData(): void {
+    if (this.wsDataFeed) {
+      this.wsDataFeed.resetDailyData();
+      logger.info('📅 Paper broker daily data reset - WebSocket OHLC cleared');
+    } else {
+      logger.debug('WebSocket data feed not available - skip daily reset');
+    }
   }
 }

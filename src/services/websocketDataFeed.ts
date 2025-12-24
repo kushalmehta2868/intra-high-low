@@ -43,6 +43,11 @@ export class WebSocketDataFeed extends EventEmitter {
   private tickCount: number = 0; // Count total ticks received
   private lastSummaryTime: number = 0; // Last time we logged summary
 
+  // Market hours control
+  private readonly IST_TIMEZONE = 'Asia/Kolkata';
+  private marketStartTime: string = '09:15';
+  private marketEndTime: string = '15:30';
+
   private config: WebSocketConfig = {
     url: 'wss://smartapisocket.angelone.in/smart-stream',
     reconnectDelay: 5000,
@@ -50,9 +55,11 @@ export class WebSocketDataFeed extends EventEmitter {
     heartbeatInterval: 30000
   };
 
-  constructor(client: AngelOneClient) {
+  constructor(client: AngelOneClient, marketStartTime?: string, marketEndTime?: string) {
     super();
     this.client = client;
+    if (marketStartTime) this.marketStartTime = marketStartTime;
+    if (marketEndTime) this.marketEndTime = marketEndTime;
   }
 
   /**
@@ -354,9 +361,32 @@ export class WebSocketDataFeed extends EventEmitter {
   }
 
   /**
+   * Check if current time is within market hours (IST timezone)
+   */
+  private isMarketHours(): boolean {
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
+    const day = istTime.getDay();
+
+    // Weekend check (Saturday = 6, Sunday = 0)
+    if (day === 0 || day === 6) {
+      return false;
+    }
+
+    const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
+
+    return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
+  }
+
+  /**
    * Emit market data event
    */
   private emitMarketData(symbol: string, ltp: number, open: number, high: number, low: number): void {
+    // CRITICAL: Don't emit data outside market hours to conserve resources
+    if (!this.isMarketHours()) {
+      return; // Silently drop data outside market hours
+    }
+
     // Get or create price tracking
     let tracking = this.priceTracking.get(symbol);
     if (!tracking) {
