@@ -7,6 +7,19 @@ export interface RiskCheckResult {
   reason?: string;
 }
 
+export interface TradeRecord {
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  pnlPercent: number;
+  entryTime: Date;
+  exitTime: Date;
+  result: 'WIN' | 'LOSS' | 'BREAKEVEN';
+}
+
 export class RiskManager extends EventEmitter {
   private riskLimits: RiskLimits;
   private tradesExecutedToday: number = 0;
@@ -14,6 +27,7 @@ export class RiskManager extends EventEmitter {
   private startingBalance: number = 0;
   private currentBalance: number = 0;
   private lastResetDate: string = '';
+  private dailyTrades: TradeRecord[] = [];
 
   constructor(riskLimits: RiskLimits, startingBalance: number) {
     super();
@@ -29,6 +43,7 @@ export class RiskManager extends EventEmitter {
     if (this.lastResetDate !== today) {
       this.tradesExecutedToday = 0;
       this.dailyPnL = 0;
+      this.dailyTrades = [];
       this.lastResetDate = today;
 
       logger.info('Daily risk counters reset', { date: today });
@@ -126,10 +141,27 @@ export class RiskManager extends EventEmitter {
     return finalQuantity;
   }
 
-  public recordTrade(pnl: number): void {
+  public recordTrade(pnl: number, tradeDetails?: Partial<TradeRecord>): void {
     this.resetDailyCounters();
     this.tradesExecutedToday++;
     this.dailyPnL += pnl;
+
+    // Record detailed trade information if provided
+    if (tradeDetails) {
+      const trade: TradeRecord = {
+        symbol: tradeDetails.symbol || 'UNKNOWN',
+        side: tradeDetails.side || 'BUY',
+        quantity: tradeDetails.quantity || 0,
+        entryPrice: tradeDetails.entryPrice || 0,
+        exitPrice: tradeDetails.exitPrice || 0,
+        pnl: pnl,
+        pnlPercent: tradeDetails.pnlPercent || 0,
+        entryTime: tradeDetails.entryTime || new Date(),
+        exitTime: tradeDetails.exitTime || new Date(),
+        result: pnl > 0.01 ? 'WIN' : pnl < -0.01 ? 'LOSS' : 'BREAKEVEN'
+      };
+      this.dailyTrades.push(trade);
+    }
 
     logger.info('Trade recorded', {
       tradesExecutedToday: this.tradesExecutedToday,
@@ -144,6 +176,11 @@ export class RiskManager extends EventEmitter {
     });
 
     this.checkRiskThresholds();
+  }
+
+  public getDailyTrades(): TradeRecord[] {
+    this.resetDailyCounters();
+    return [...this.dailyTrades];
   }
 
   public updateBalance(balance: number): void {

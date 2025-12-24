@@ -111,12 +111,33 @@ export class TradingEngine extends EventEmitter {
 
     this.positionManager.on('position_closed', (position: any) => {
       logger.info('Position closed', position);
-      this.riskManager.recordTrade(position.pnl);
+
+      // Record trade with detailed information for daily summary
+      const pnlPercent = (position.pnl / (position.entryPrice * position.quantity)) * 100;
+      this.riskManager.recordTrade(position.pnl, {
+        symbol: position.symbol,
+        side: position.type === 'LONG' ? 'SELL' : 'BUY', // Closing side
+        quantity: position.quantity,
+        entryPrice: position.entryPrice,
+        exitPrice: position.currentPrice || position.exitPrice,
+        pnlPercent: pnlPercent,
+        entryTime: position.entryTime,
+        exitTime: position.exitTime || new Date()
+      });
+
+      // Send enhanced Telegram notification with full trade details
       this.telegramBot.sendPositionUpdate(
         position.symbol,
         position.pnl,
-        (position.pnl / (position.entryPrice * position.quantity)) * 100,
-        'CLOSED'
+        pnlPercent,
+        'CLOSED',
+        {
+          entryPrice: position.entryPrice,
+          exitPrice: position.currentPrice || position.exitPrice,
+          quantity: position.quantity,
+          entryTime: position.entryTime,
+          exitTime: position.exitTime || new Date()
+        }
       );
     });
 
@@ -185,6 +206,11 @@ export class TradingEngine extends EventEmitter {
 
     this.scheduler.on('update_prices', async () => {
       await this.positionManager.updateMarketPrices();
+    });
+
+    this.scheduler.on('daily_summary', async () => {
+      logger.info('📊 Sending daily summary report');
+      await this.sendDailySummaryReport();
     });
 
     // FIX #4: Heartbeat monitor event handlers
@@ -616,6 +642,45 @@ export class TradingEngine extends EventEmitter {
   private async sendRiskStatsReport(): Promise<void> {
     const stats = this.riskManager.getRiskStats();
     await this.telegramBot.sendRiskStatsReport(stats);
+  }
+
+  private async sendDailySummaryReport(): Promise<void> {
+    const stats = this.riskManager.getRiskStats();
+    const trades = this.riskManager.getDailyTrades();
+    const balance = await this.broker.getAccountBalance();
+
+    // Calculate trade statistics
+    const winningTrades = trades.filter(t => t.result === 'WIN').length;
+    const losingTrades = trades.filter(t => t.result === 'LOSS').length;
+    const breakEvenTrades = trades.filter(t => t.result === 'BREAKEVEN').length;
+    const winRate = trades.length > 0 ? (winningTrades / trades.length) * 100 : 0;
+
+    const largestWin = trades.length > 0
+      ? Math.max(...trades.map(t => t.pnl), 0)
+      : 0;
+    const largestLoss = trades.length > 0
+      ? Math.min(...trades.map(t => t.pnl), 0)
+      : 0;
+
+    await this.telegramBot.sendDailySummary({
+      dailyPnL: stats.dailyPnL,
+      totalTrades: trades.length,
+      winningTrades,
+      losingTrades,
+      breakEvenTrades,
+      winRate,
+      largestWin,
+      largestLoss,
+      trades: trades,
+      startingBalance: this.initialBalance,
+      endingBalance: balance
+    });
+
+    logger.info('📊 Daily summary report sent', {
+      totalTrades: trades.length,
+      dailyPnL: stats.dailyPnL,
+      winRate: winRate.toFixed(1)
+    });
   }
 
   /**

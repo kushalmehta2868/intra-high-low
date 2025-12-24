@@ -65,17 +65,33 @@ export class PositionManager extends EventEmitter {
         ? (trade.price - position.entryPrice) * closedQuantity
         : (position.entryPrice - trade.price) * closedQuantity;
 
+      const pnlPercent = (pnl / (position.entryPrice * closedQuantity)) * 100;
+
       position.quantity -= closedQuantity;
       position.pnl = pnl;
+      position.pnlPercent = pnlPercent;
+      position.currentPrice = trade.price; // CRITICAL: Set exit price
 
       if (position.quantity === 0) {
         this.positions.delete(trade.symbol);
-        this.emit('position_closed', { ...position, pnl });
+
+        // Emit with complete position data including exit price
+        this.emit('position_closed', {
+          ...position,
+          pnl,
+          pnlPercent,
+          currentPrice: trade.price, // Ensure currentPrice is set
+          exitPrice: trade.price,     // Also add exitPrice for clarity
+          exitTime: trade.timestamp
+        });
 
         logger.info('Position closed', {
           symbol: trade.symbol,
+          entryPrice: position.entryPrice,
+          exitPrice: trade.price,
+          quantity: closedQuantity,
           pnl,
-          pnlPercent: (pnl / (position.entryPrice * closedQuantity)) * 100
+          pnlPercent
         });
 
         logger.audit('POSITION_CLOSED', {
@@ -83,13 +99,16 @@ export class PositionManager extends EventEmitter {
           entryPrice: position.entryPrice,
           exitPrice: trade.price,
           quantity: closedQuantity,
-          pnl
+          pnl,
+          pnlPercent
         });
       } else {
+        position.currentPrice = trade.price;
         this.emit('position_reduced', position);
         logger.info('Position reduced', {
           symbol: trade.symbol,
-          remainingQuantity: position.quantity
+          remainingQuantity: position.quantity,
+          partialPnL: pnl
         });
       }
     } else {
@@ -99,6 +118,7 @@ export class PositionManager extends EventEmitter {
 
       position.quantity = totalQuantity;
       position.entryPrice = avgPrice;
+      position.currentPrice = trade.price; // Update current price
       this.emit('position_increased', position);
 
       logger.info('Position increased', {

@@ -12,7 +12,9 @@ export class MarketScheduler extends EventEmitter {
   private marketEndJob: cron.ScheduledTask | null = null;
   private squareOffJob: cron.ScheduledTask | null = null;
   private priceUpdateJob: cron.ScheduledTask | null = null;
+  private dailySummaryJob: cron.ScheduledTask | null = null;
   private readonly IST_TIMEZONE = 'Asia/Kolkata';
+  private readonly DAILY_SUMMARY_TIME = '17:00'; // 5 PM IST
 
   constructor(
     marketStartTime: string,
@@ -34,6 +36,7 @@ export class MarketScheduler extends EventEmitter {
     this.scheduleMarketEnd();
     this.scheduleAutoSquareOff();
     this.schedulePriceUpdates();
+    this.scheduleDailySummary();
 
     // Get current time in IST for logging
     const now = new Date();
@@ -100,6 +103,22 @@ export class MarketScheduler extends EventEmitter {
     });
   }
 
+  private scheduleDailySummary(): void {
+    const [hour, minute] = this.DAILY_SUMMARY_TIME.split(':');
+    const cronExpression = `${minute} ${hour} * * 1-5`; // Monday-Friday at 5 PM
+
+    this.dailySummaryJob = cron.schedule(cronExpression, () => {
+      logger.info('📊 Daily summary time reached - sending report');
+      this.emit('daily_summary');
+    }, {
+      timezone: this.IST_TIMEZONE
+    });
+
+    logger.info('📊 Daily summary scheduled', {
+      time: `${this.DAILY_SUMMARY_TIME} IST`
+    });
+  }
+
   public isMarketHours(): boolean {
     // Check if market is open for DATA FETCHING (9:15 AM - 3:30 PM)
     const now = new Date();
@@ -146,6 +165,7 @@ export class MarketScheduler extends EventEmitter {
     if (this.marketEndJob) this.marketEndJob.stop();
     if (this.squareOffJob) this.squareOffJob.stop();
     if (this.priceUpdateJob) this.priceUpdateJob.stop();
+    if (this.dailySummaryJob) this.dailySummaryJob.stop();
 
     logger.info('Market scheduler stopped');
     this.emit('scheduler_stopped');

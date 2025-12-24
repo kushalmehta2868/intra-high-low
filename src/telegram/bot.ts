@@ -145,16 +145,48 @@ ${message}
     symbol: string,
     pnl: number,
     pnlPercent: number,
-    status: 'OPENED' | 'CLOSED'
+    status: 'OPENED' | 'CLOSED',
+    additionalInfo?: {
+      entryPrice?: number;
+      exitPrice?: number;
+      quantity?: number;
+      entryTime?: Date;
+      exitTime?: Date;
+    }
   ): Promise<void> {
     const emoji = pnl >= 0 ? '✅' : '❌';
     const statusEmoji = status === 'OPENED' ? '📈' : '📉';
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
 
     let message = `${statusEmoji} *POSITION ${status}*\n\n`;
+    message += `🕐 *Time:* ${timeStr}\n`;
     message += `*Symbol:* \`${symbol}\`\n`;
 
-    if (status === 'CLOSED') {
+    if (status === 'CLOSED' && additionalInfo) {
+      message += `\n`;
+      if (additionalInfo.quantity) {
+        message += `*Quantity:* ${additionalInfo.quantity}\n`;
+      }
+      if (additionalInfo.entryPrice) {
+        message += `*Entry Price:* ₹${additionalInfo.entryPrice.toFixed(2)}\n`;
+      }
+      if (additionalInfo.exitPrice) {
+        message += `*Exit Price:* ₹${additionalInfo.exitPrice.toFixed(2)}\n`;
+      }
       message += `\n${emoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
+
+      if (additionalInfo.entryTime && additionalInfo.exitTime) {
+        const holdingTime = (additionalInfo.exitTime.getTime() - additionalInfo.entryTime.getTime()) / 60000; // minutes
+        const hours = Math.floor(holdingTime / 60);
+        const minutes = Math.floor(holdingTime % 60);
+        message += `\n⏱️ *Holding Time:* ${hours > 0 ? `${hours}h ` : ''}${minutes}m`;
+      }
 
       if (pnl >= 0) {
         message += `\n🎯 *Profit Trade*`;
@@ -250,6 +282,75 @@ Max Loss Allowed: ${stats.maxDailyLossPercent}%
 
 ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     `;
+    await this.sendMessage(message);
+  }
+
+  public async sendDailySummary(data: {
+    dailyPnL: number;
+    totalTrades: number;
+    winningTrades: number;
+    losingTrades: number;
+    breakEvenTrades: number;
+    winRate: number;
+    largestWin: number;
+    largestLoss: number;
+    trades: any[];
+    startingBalance: number;
+    endingBalance: number;
+  }): Promise<void> {
+    const emoji = data.dailyPnL >= 0 ? '📈' : '📉';
+    const pnlEmoji = data.dailyPnL >= 0 ? '✅' : '❌';
+    const returnPercent = ((data.dailyPnL / data.startingBalance) * 100).toFixed(2);
+
+    let message = `📊 *DAILY TRADING SUMMARY*\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    // Performance Summary
+    message += `${emoji} *Performance*\n`;
+    message += `${pnlEmoji} Net P&L: ₹${data.dailyPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${returnPercent >= '0' ? '+' : ''}${returnPercent}%)\n`;
+    message += `💰 Starting: ₹${data.startingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+    message += `💵 Ending: ₹${data.endingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+
+    // Trade Statistics
+    message += `📊 *Trade Statistics*\n`;
+    message += `Total Trades: ${data.totalTrades}\n`;
+    message += `✅ Wins: ${data.winningTrades}\n`;
+    message += `❌ Losses: ${data.losingTrades}\n`;
+    message += `➖ Break-even: ${data.breakEvenTrades}\n`;
+    message += `📈 Win Rate: ${data.winRate.toFixed(1)}%\n\n`;
+
+    if (data.totalTrades > 0) {
+      message += `🏆 Largest Win: ₹${data.largestWin.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+      message += `💔 Largest Loss: ₹${data.largestLoss.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+    }
+
+    // Trade Details Table
+    if (data.trades.length > 0) {
+      message += `━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `*📋 Trade Details*\n\n`;
+
+      message += `\`\`\`\n`;
+      message += `Symbol    Side  P&L      %\n`;
+      message += `────────────────────────\n`;
+
+      for (const trade of data.trades) {
+        const symbol = trade.symbol.replace('-EQ', '').padEnd(9);
+        const side = trade.side.padEnd(4);
+        const pnl = (trade.pnl >= 0 ? '+' : '') + trade.pnl.toFixed(0);
+        const pnlFormatted = pnl.padStart(8);
+        const percent = (trade.pnlPercent >= 0 ? '+' : '') + trade.pnlPercent.toFixed(1) + '%';
+
+        message += `${symbol} ${side} ${pnlFormatted} ${percent}\n`;
+      }
+
+      message += `\`\`\`\n`;
+    } else {
+      message += `━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `No trades executed today\n`;
+    }
+
+    message += `\n🕐 Report generated at ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`;
+
     await this.sendMessage(message);
   }
 
