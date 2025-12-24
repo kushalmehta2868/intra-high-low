@@ -4,7 +4,7 @@ import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade
 import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
 import { symbolTokenService } from '../../services/symbolTokenService';
-import { MarketDataFetcher } from '../../services/marketDataFetcher';
+import { WebSocketDataFeed } from '../../services/websocketDataFeed';
 import { configManager } from '../../config';
 
 interface PositionMetadata {
@@ -15,7 +15,7 @@ interface PositionMetadata {
 export class AngelOneBroker extends BaseBroker {
   private client: AngelOneClient;
   private positionMetadata: Map<string, PositionMetadata> = new Map();
-  private marketDataFetcher: MarketDataFetcher | null = null;
+  private wsDataFeed: WebSocketDataFeed | null = null;
   private watchlist: string[] = [];
 
   constructor(config: BrokerConfig, watchlist?: string[]) {
@@ -43,33 +43,30 @@ export class AngelOneBroker extends BaseBroker {
         await symbolTokenService.refreshCache();
         logger.info('Symbol token cache refreshed');
 
-        // Get market hours from config
-        const config = configManager.getConfig();
-        const marketStartTime = config.trading.marketStartTime;
-        const marketEndTime = config.trading.marketEndTime;
-
-        // Initialize market data fetcher for REAL mode
+        // Initialize WebSocket data feed for REAL mode
         if (this.watchlist.length > 0) {
-          this.marketDataFetcher = new MarketDataFetcher(
-            this.client,
-            this.watchlist,
-            marketStartTime,
-            marketEndTime
-          );
+          this.wsDataFeed = new WebSocketDataFeed(this.client);
 
-          // Forward market data events from fetcher to broker listeners
-          this.marketDataFetcher.on('market_data', (data: MarketData) => {
+          // Forward market data events from WebSocket to broker listeners
+          this.wsDataFeed.on('market_data', (data: MarketData) => {
             this.emitMarketData(data);
           });
 
-          // Start fetching market data
-          await this.marketDataFetcher.start();
-          logger.info('✅ Market data fetcher started for REAL mode', {
-            symbols: this.watchlist.length,
-            interval: '5 seconds'
-          });
+          // Connect to WebSocket
+          const wsConnected = await this.wsDataFeed.connect();
+          if (wsConnected) {
+            logger.info('✅ WebSocket connected for REAL mode');
+
+            // Subscribe to all watchlist symbols
+            await this.wsDataFeed.subscribeMultiple(this.watchlist, 'SNAP_QUOTE');
+            logger.info('✅ Subscribed to symbols via WebSocket', {
+              count: this.watchlist.length
+            });
+          } else {
+            logger.warn('WebSocket connection failed - market data unavailable');
+          }
         } else {
-          logger.warn('⚠️ No watchlist provided - market data fetching disabled in REAL mode');
+          logger.warn('⚠️ No watchlist provided - market data streaming disabled in REAL mode');
         }
       } else {
         logger.error('Failed to connect to Angel One broker');
@@ -86,11 +83,11 @@ export class AngelOneBroker extends BaseBroker {
   public async disconnect(): Promise<void> {
     this.isConnected = false;
 
-    // Stop market data fetcher
-    if (this.marketDataFetcher) {
-      await this.marketDataFetcher.stop();
-      this.marketDataFetcher = null;
-      logger.info('Market data fetcher stopped');
+    // Disconnect WebSocket data feed
+    if (this.wsDataFeed) {
+      this.wsDataFeed.disconnect();
+      this.wsDataFeed = null;
+      logger.info('WebSocket data feed disconnected');
     }
 
     // Clear position metadata on disconnect

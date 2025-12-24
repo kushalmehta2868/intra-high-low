@@ -4,7 +4,7 @@ import { logger } from '../../utils/logger';
 import { AngelOneClient } from '../angelone/client';
 import { TradingTelegramBot } from '../../telegram/bot';
 import { TelegramConfig } from '../../types';
-import { MarketDataFetcher } from '../../services/marketDataFetcher';
+import { WebSocketDataFeed } from '../../services/websocketDataFeed';
 import { symbolTokenService } from '../../services/symbolTokenService';
 import { configManager } from '../../config';
 
@@ -26,7 +26,7 @@ export class PaperBroker extends BaseBroker {
   // Real Angel One client for market data
   private angelClient: AngelOneClient | null = null;
   private telegramBot: TradingTelegramBot | null = null;
-  private marketDataFetcher: MarketDataFetcher | null = null;
+  private wsDataFeed: WebSocketDataFeed | null = null;
 
   // Track monitoring intervals to prevent leaks and duplicate monitoring
   private monitoringIntervals: Map<string, NodeJS.Timeout> = new Map();
@@ -71,29 +71,31 @@ export class PaperBroker extends BaseBroker {
           await symbolTokenService.refreshCache();
           logger.info('✅ Symbol token cache refreshed');
 
-          // Get market hours from config
-          const config = configManager.getConfig();
-          const marketStartTime = config.trading.marketStartTime;
-          const marketEndTime = config.trading.marketEndTime;
-
-          // Initialize and start market data fetcher with watchlist and market hours
-          const watchlist = (this as any).watchlist;
-          this.marketDataFetcher = new MarketDataFetcher(
-            this.angelClient,
-            watchlist,
-            marketStartTime,
-            marketEndTime
-          );
+          // Initialize WebSocket data feed for real-time market data
+          this.wsDataFeed = new WebSocketDataFeed(this.angelClient);
 
           // Forward market data events
-          this.marketDataFetcher.on('market_data', (data: MarketData) => {
+          this.wsDataFeed.on('market_data', (data: MarketData) => {
             // Emit market data for strategies to consume
             this.emit('market_data', data);
           });
 
-          // Start fetching market data
-          await this.marketDataFetcher.start();
-          logger.info('✅ Market data streaming started');
+          // Connect to WebSocket
+          const wsConnected = await this.wsDataFeed.connect();
+          if (wsConnected) {
+            logger.info('✅ WebSocket market data connected');
+
+            // Subscribe to all symbols in watchlist
+            const watchlist = (this as any).watchlist;
+            if (watchlist && watchlist.length > 0) {
+              await this.wsDataFeed.subscribeMultiple(watchlist, 'SNAP_QUOTE');
+              logger.info('✅ Subscribed to symbols via WebSocket', {
+                count: watchlist.length
+              });
+            }
+          } else {
+            logger.warn('WebSocket connection failed - market data unavailable');
+          }
         }
       }
 
@@ -106,7 +108,7 @@ export class PaperBroker extends BaseBroker {
           '📱 Signals will be sent to this chat\n' +
           `💰 Starting Balance: ₹${this.startingBalance.toLocaleString('en-IN')}\n\n` +
           '⚠️ No actual orders will be placed\n\n' +
-          '🔄 Market data fetching every 5 seconds'
+          '📡 Real-time WebSocket market data streaming'
         );
       }
 
@@ -115,7 +117,7 @@ export class PaperBroker extends BaseBroker {
       logger.audit('PAPER_BROKER_CONNECTED', {
         initialBalance: this.accountBalance,
         realDataEnabled: this.angelClient !== null,
-        dataStreamingEnabled: this.marketDataFetcher !== null
+        dataStreamingEnabled: this.wsDataFeed !== null
       });
 
       return true;
@@ -126,10 +128,10 @@ export class PaperBroker extends BaseBroker {
   }
 
   public async disconnect(): Promise<void> {
-    // Stop market data fetcher
-    if (this.marketDataFetcher) {
-      this.marketDataFetcher.stop();
-      this.marketDataFetcher = null;
+    // Disconnect WebSocket data feed
+    if (this.wsDataFeed) {
+      this.wsDataFeed.disconnect();
+      this.wsDataFeed = null;
     }
 
     this.isConnected = false;

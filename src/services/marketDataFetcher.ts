@@ -189,13 +189,14 @@ export class MarketDataFetcher extends EventEmitter {
             'NSE': batchTokens
           };
 
-          // Fetch market data for this batch with timeout
+          // Fetch market data for this batch with timeout (30s for network latency on Render)
+          const TIMEOUT_MS = 30000; // 30 seconds - increased for cloud deployment
           const marketData = await Promise.race([
             this.client.getMarketData('OHLC', exchangeTokens),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Market data fetch timeout')), 10000)
+              setTimeout(() => reject(new Error(`Market data fetch timeout after ${TIMEOUT_MS}ms for batch ${batchIndex + 1}`)), TIMEOUT_MS)
             )
-          ]);
+          ]) as any;
 
           if (!marketData || !marketData.fetched) {
             logger.warn(`No market data received for batch ${batchIndex + 1}/${symbolBatches.length}`);
@@ -223,11 +224,17 @@ export class MarketDataFetcher extends EventEmitter {
           }
 
         } catch (batchError: any) {
-          logger.warn(`Failed to fetch batch ${batchIndex + 1}/${symbolBatches.length}`, {
+          const isTimeout = batchError.message?.includes('timeout');
+          const logLevel = isTimeout ? 'warn' : 'error';
+
+          logger[logLevel](`Failed to fetch batch ${batchIndex + 1}/${symbolBatches.length}`, {
             error: batchError.message,
-            symbols: batch
+            symbols: batch,
+            isTimeout,
+            suggestion: isTimeout ? 'Network latency detected - will retry on next cycle' : 'Check API connectivity'
           });
-          // Continue with next batch even if this one fails
+
+          // Continue with next batch even if this one fails - non-fatal error
           continue;
         }
       }

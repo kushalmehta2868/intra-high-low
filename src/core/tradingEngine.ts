@@ -177,25 +177,17 @@ export class TradingEngine extends EventEmitter {
     });
 
     this.scheduler.on('market_open', async () => {
-      logger.info('🟢 Market opened - starting strategies and market data');
+      logger.info('🟢 Market opened - starting strategies');
 
-      // Start market data fetching (Paper mode only)
-      if (this.config.trading.mode === TradingMode.PAPER) {
-        await (this.broker as any).startMarketDataFetching?.();
-      }
-
+      // WebSocket already connected, just start strategies
       await this.startStrategies();
     });
 
     this.scheduler.on('market_close', async () => {
-      logger.info('🔴 Market closed - stopping strategies and market data');
+      logger.info('🔴 Market closed - stopping strategies');
 
+      // WebSocket stays connected, just stop strategies
       await this.stopStrategies();
-
-      // Stop market data fetching (Paper mode only)
-      if (this.config.trading.mode === TradingMode.PAPER) {
-        (this.broker as any).stopMarketDataFetching?.();
-      }
     });
 
     this.scheduler.on('auto_square_off', async () => {
@@ -711,10 +703,7 @@ export class TradingEngine extends EventEmitter {
     // Stop accepting new signals
     await this.stopStrategies();
 
-    // Stop data feeds
-    if (this.config.trading.mode === TradingMode.PAPER) {
-      (this.broker as any).stopMarketDataFetching?.();
-    }
+    // WebSocket will be disconnected on broker.disconnect()
 
     // Stop monitoring services
     this.heartbeatMonitor.stop();
@@ -759,10 +748,10 @@ export class TradingEngine extends EventEmitter {
 
     this.isRunning = true;
 
-    // If starting during market hours, start market data fetching immediately
-    if (this.scheduler.isMarketHours() && this.config.trading.mode === TradingMode.PAPER) {
-      logger.info('⏰ Bot started during market hours - starting market data fetching immediately');
-      await (this.broker as any).startMarketDataFetching?.();
+    // If starting during market hours, start strategies immediately
+    // WebSocket is already connected from broker.connect()
+    if (this.scheduler.isMarketHours()) {
+      logger.info('⏰ Bot started during market hours - starting strategies immediately');
       await this.startStrategies();
     } else {
       logger.info('⏰ Bot started outside market hours - will wait for market open');

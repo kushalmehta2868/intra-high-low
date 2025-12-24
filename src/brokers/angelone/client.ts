@@ -268,7 +268,7 @@ export class AngelOneClient {
         mode: mode,
         exchangeTokens: exchangeTokens
       }, {
-        timeout: 10000 // 10 second timeout
+        timeout: 30000 // 30 second timeout - increased for cloud deployment with network latency
       });
 
       if (response.data.status && response.data.data) {
