@@ -33,6 +33,10 @@ export class TradingEngine extends EventEmitter {
   // Slippage configuration (FIX #2)
   private readonly SLIPPAGE_BUFFER = 0.001; // 0.1% expected slippage
 
+  // Logging throttle - log strategy feeding every 10 seconds
+  private lastStrategyLogTime: Map<string, number> = new Map();
+  private readonly STRATEGY_LOG_INTERVAL_MS = 10000; // 10 seconds
+
   constructor(config: AppConfig, watchlist?: string[]) {
     super();
     this.config = config;
@@ -92,13 +96,22 @@ export class TradingEngine extends EventEmitter {
       // FIX #4: Record data receipt for heartbeat monitoring
       this.heartbeatMonitor.recordDataReceived();
 
-      logger.info(`🔄 Feeding data to strategy: ${data.symbol}`, {
-        ltp: `₹${data.ltp.toFixed(2)}`,
-        high: `₹${data.high.toFixed(2)}`,
-        low: `₹${data.low.toFixed(2)}`
-      });
+      // Throttle logging - log every 10 seconds per symbol
+      const now = Date.now();
+      const lastLog = this.lastStrategyLogTime.get(data.symbol) || 0;
 
-      // Feed data to all active strategies
+      if (now - lastLog >= this.STRATEGY_LOG_INTERVAL_MS) {
+        this.lastStrategyLogTime.set(data.symbol, now);
+
+        logger.info(`🔄 Feeding data to strategies: ${data.symbol}`, {
+          ltp: `₹${data.ltp.toFixed(2)}`,
+          high: `₹${data.high.toFixed(2)}`,
+          low: `₹${data.low.toFixed(2)}`,
+          strategies: this.strategies.size
+        });
+      }
+
+      // Feed data to all active strategies (happens on every tick, just throttle logging)
       for (const strategy of this.strategies.values()) {
         strategy.onMarketData(data);
       }

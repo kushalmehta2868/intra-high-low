@@ -32,6 +32,17 @@ export class WebSocketDataFeed extends EventEmitter {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
+  // Authentication credentials
+  private authToken: string | null = null;
+  private feedToken: string | null = null;
+  private clientCode: string | null = null;
+
+  // Logging throttle - log market data every 10 seconds
+  private lastLogTime: Map<string, number> = new Map();
+  private readonly LOG_INTERVAL_MS = 10000; // 10 seconds
+  private tickCount: number = 0; // Count total ticks received
+  private lastSummaryTime: number = 0; // Last time we logged summary
+
   private config: WebSocketConfig = {
     url: 'wss://smartapisocket.angelone.in/smart-stream',
     reconnectDelay: 5000,
@@ -49,41 +60,91 @@ export class WebSocketDataFeed extends EventEmitter {
    */
   public async connect(): Promise<boolean> {
     try {
-      logger.info('🔌 Connecting to WebSocket market data feed...');
+      logger.info('🔌 Connecting to WebSocket market data feed...', {
+        url: this.config.url
+      });
 
       // Get auth token from client
       const authToken = this.client.getAuthToken();
       const feedToken = this.client.getFeedToken();
       const clientCode = this.client.getClientCode();
 
+      logger.info('🔑 Checking authentication credentials', {
+        hasAuthToken: !!authToken,
+        hasFeedToken: !!feedToken,
+        hasClientCode: !!clientCode,
+        clientCode: clientCode
+      });
+
       if (!authToken || !feedToken || !clientCode) {
-        logger.error('Missing authentication credentials for WebSocket');
+        logger.error('❌ Missing authentication credentials for WebSocket', {
+          authToken: !!authToken,
+          feedToken: !!feedToken,
+          clientCode: !!clientCode
+        });
         return false;
       }
 
-      // Create WebSocket connection
-      this.ws = new WebSocket(this.config.url);
+      // Store credentials for auth message after connection
+      this.authToken = authToken;
+      this.feedToken = feedToken;
+      this.clientCode = clientCode;
 
-      this.ws.on('open', () => {
-        this.handleOpen(authToken, feedToken, clientCode);
+      // Create WebSocket connection with promise to wait for connection
+      return new Promise((resolve, reject) => {
+        try {
+          // CRITICAL: Angel One WebSocket authentication via URL parameters
+          // Format: wss://smartapisocket.angelone.in/smart-stream?jwtToken=xxx&apiKey=yyy&clientCode=zzz&feedToken=www
+          const wsUrl = `${this.config.url}?jwtToken=${authToken}&apiKey=${authToken}&clientCode=${clientCode}&feedToken=${feedToken}`;
+
+          logger.info('🔌 Creating WebSocket connection with auth parameters', {
+            baseUrl: this.config.url,
+            clientCode: clientCode,
+            hasAuthToken: !!authToken,
+            hasFeedToken: !!feedToken
+          });
+
+          // Create WebSocket with auth parameters in URL
+          this.ws = new WebSocket(wsUrl);
+
+          // Set timeout for connection
+          const connectionTimeout = setTimeout(() => {
+            logger.error('❌ WebSocket connection timeout after 30 seconds');
+            if (this.ws) {
+              this.ws.close();
+            }
+            resolve(false);
+          }, 30000);
+
+          this.ws.on('open', () => {
+            clearTimeout(connectionTimeout);
+            this.handleOpen();
+            resolve(true);
+          });
+
+          this.ws.on('message', (data: WebSocket.Data) => {
+            this.handleMessage(data);
+          });
+
+          this.ws.on('error', (error: Error) => {
+            clearTimeout(connectionTimeout);
+            this.handleError(error);
+            resolve(false);
+          });
+
+          this.ws.on('close', (code: number, reason: string) => {
+            clearTimeout(connectionTimeout);
+            this.handleClose(code, reason);
+          });
+
+        } catch (err: any) {
+          logger.error('❌ Error creating WebSocket connection', err);
+          resolve(false);
+        }
       });
-
-      this.ws.on('message', (data: WebSocket.Data) => {
-        this.handleMessage(data);
-      });
-
-      this.ws.on('error', (error: Error) => {
-        this.handleError(error);
-      });
-
-      this.ws.on('close', (code: number, reason: string) => {
-        this.handleClose(code, reason);
-      });
-
-      return true;
 
     } catch (error: any) {
-      logger.error('Error connecting to WebSocket', error);
+      logger.error('❌ Error in WebSocket connect method', error);
       return false;
     }
   }
@@ -91,17 +152,36 @@ export class WebSocketDataFeed extends EventEmitter {
   /**
    * Handle WebSocket connection open
    */
-  private handleOpen(authToken: string, feedToken: string, clientCode: string): void {
-    logger.info('✅ WebSocket connected');
+  private handleOpen(): void {
+    logger.info('✅ WebSocket connected to Angel One');
     this.isConnected = true;
     this.reconnectAttempts = 0;
 
-    // Send authentication message
+    // Initialize summary timer
+    this.lastSummaryTime = Date.now();
+    this.tickCount = 0;
+
+    // CRITICAL: Angel One WebSocket authentication protocol
+    // After connection, send authentication message with client credentials
+    // This is the CORRECT way - NOT via headers during connection
     const authMessage = {
-      a: 'authorization',
-      user: clientCode,
-      token: authToken
+      action: 1, // Subscribe action
+      params: {
+        mode: 3, // SNAP_QUOTE mode (full OHLC data)
+        tokenList: [{
+          exchangeType: 1, // NSE
+          tokens: [] // Empty for initial auth
+        }]
+      }
     };
+
+    logger.info('🔐 Sending authentication message to WebSocket', {
+      action: authMessage.action,
+      mode: authMessage.params.mode,
+      clientCode: this.clientCode,
+      hasFeedToken: !!this.feedToken,
+      hasAuthToken: !!this.authToken
+    });
 
     this.send(authMessage);
 
@@ -116,101 +196,246 @@ export class WebSocketDataFeed extends EventEmitter {
    */
   private handleMessage(data: WebSocket.Data): void {
     try {
-      const message = JSON.parse(data.toString());
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
 
-      // Handle different message types
-      if (message.t === 'ck' && message.s === 'OK') {
-        logger.info('✅ WebSocket authenticated successfully');
-        this.resubscribeAll();
-      } else if (message.t === 'tk' || message.t === 'tf') {
-        // Market data update
-        this.processMarketData(message);
-      } else if (message.t === 'er') {
-        logger.error('WebSocket error message', message);
+      // Use debug for high-frequency data logging
+      logger.debug('📥 WebSocket data received', {
+        length: buffer.length,
+        isBinary: Buffer.isBuffer(data)
+      });
+
+      // Try parsing as JSON first (for control messages)
+      try {
+        const jsonString = buffer.toString('utf8');
+        const message = JSON.parse(jsonString);
+
+        logger.info('📦 Parsed JSON control message', {
+          type: message.type,
+          action: message.action,
+          keys: Object.keys(message)
+        });
+
+        if (message.type === 'tick') {
+          this.processTickMessage(message.data);
+        } else if (message.type === 'error') {
+          logger.error('WebSocket error message', message);
+        } else {
+          logger.info('Control message received', message);
+        }
+      } catch (parseError) {
+        // Not JSON - parse as binary tick data (this is the most common path)
+        this.parseBinaryTick(buffer);
       }
 
     } catch (error: any) {
-      logger.error('Error processing WebSocket message', error);
+      logger.error('Error handling WebSocket message', {
+        error: error.message,
+        stack: error.stack
+      });
     }
   }
 
   /**
-   * Process market data updates
+   * Parse binary tick data from Angel One SmartAPI WebSocket V2
+   * Binary format documentation: https://github.com/angel-one/smartapi-python/blob/main/SmartApi/smartWebSocketV2.py
    */
-  private processMarketData(message: any): void {
+  private parseBinaryTick(data: Buffer): void {
     try {
-      // Find subscription by token
-      let subscription: SubscriptionData | undefined;
+      // Minimum length check - need at least 123 bytes for OHLC data
+      if (data.length < 123) {
+        logger.warn('⚠️ Binary data too short for OHLC parsing', {
+          length: data.length,
+          required: 123
+        });
+        return;
+      }
+
+      // Extract token (bytes 2-27, null-terminated string)
+      let token = '';
+      for (let i = 2; i < 27; i++) {
+        if (data[i] === 0) break; // Null terminator
+        token += String.fromCharCode(data[i]);
+      }
+
+      // Extract market data using little-endian format (<)
+      // Prices are in paise (divide by 100 to get rupees)
+      const subscriptionMode = data.readUInt8(0);
+      const exchangeType = data.readUInt8(1);
+      const ltp = data.readBigInt64LE(43) / 100n; // Bytes 43-51
+      const open = data.readBigInt64LE(91) / 100n; // Bytes 91-99
+      const high = data.readBigInt64LE(99) / 100n; // Bytes 99-107
+      const low = data.readBigInt64LE(107) / 100n; // Bytes 107-115
+      const close = data.readBigInt64LE(115) / 100n; // Bytes 115-123
+
+      // Convert BigInt to Number for market data
+      const ltpNum = Number(ltp);
+      const openNum = Number(open);
+      const highNum = Number(high);
+      const lowNum = Number(low);
+      const closeNum = Number(close);
+
+      // Use debug for high-frequency tick data
+      logger.debug('📊 Binary tick parsed', {
+        token,
+        mode: subscriptionMode,
+        ltp: `₹${ltpNum.toFixed(2)}`,
+        high: `₹${highNum.toFixed(2)}`,
+        low: `₹${lowNum.toFixed(2)}`
+      });
+
+      // Find symbol for this token
+      let symbol: string | undefined;
       for (const sub of this.subscriptions.values()) {
-        if (sub.token === message.tk) {
-          subscription = sub;
+        if (sub.token === token) {
+          symbol = sub.symbol;
           break;
         }
       }
 
-      if (!subscription) {
-        return;
+      if (symbol) {
+        this.tickCount++; // Increment tick counter
+        this.emitMarketData(symbol, ltpNum, openNum, highNum, lowNum);
+      } else {
+        logger.warn('⚠️ Token not found in subscriptions', {
+          token,
+          subscribedTokens: Array.from(this.subscriptions.values()).map(s => s.token)
+        });
       }
-
-      const symbol = subscription.symbol;
-
-      // Get or create price tracking
-      let tracking = this.priceTracking.get(symbol);
-      if (!tracking) {
-        tracking = {
-          open: 0,
-          high: 0,
-          low: Infinity,
-          lastClose: 0
-        };
-        this.priceTracking.set(symbol, tracking);
-      }
-
-      // Parse market data based on mode
-      const ltp = parseFloat(message.lp || message.c || 0);
-      const open = parseFloat(message.o || tracking.open || ltp);
-      const high = parseFloat(message.h || tracking.high || ltp);
-      const low = parseFloat(message.l || tracking.low || ltp);
-      const volume = parseInt(message.v || 0);
-
-      // Update tracking
-      if (tracking.open === 0) {
-        tracking.open = open;
-      }
-      tracking.high = Math.max(tracking.high, high);
-      tracking.low = tracking.low === Infinity ? low : Math.min(tracking.low, low);
-
-      // Create market data object
-      const marketData: MarketData = {
-        symbol,
-        ltp,
-        open: tracking.open,
-        high: tracking.high,
-        low: tracking.low,
-        close: ltp,
-        volume,
-        timestamp: new Date()
-      };
-
-      // Emit market data event
-      this.emit('market_data', marketData);
-
-      logger.debug(`📊 WebSocket data: ${symbol}`, {
-        ltp: `₹${ltp.toFixed(2)}`,
-        high: `₹${tracking.high.toFixed(2)}`,
-        low: `₹${tracking.low.toFixed(2)}`
-      });
 
     } catch (error: any) {
-      logger.error('Error processing market data', error);
+      logger.error('❌ Error parsing binary tick', {
+        error: error.message,
+        stack: error.stack,
+        dataLength: data.length
+      });
     }
   }
+
+  /**
+   * Process tick message (JSON format)
+   */
+  private processTickMessage(tickData: any): void {
+    try {
+      const ticks = Array.isArray(tickData) ? tickData : [tickData];
+
+      for (const tick of ticks) {
+        const token = tick.token || tick.symbolToken;
+
+        // Find symbol
+        let symbol: string | undefined;
+        for (const sub of this.subscriptions.values()) {
+          if (sub.token === token) {
+            symbol = sub.symbol;
+            break;
+          }
+        }
+
+        if (symbol && tick.ltp) {
+          logger.info('📈 Tick data received', {
+            symbol,
+            ltp: tick.ltp,
+            open: tick.open,
+            high: tick.high,
+            low: tick.low
+          });
+
+          this.emitMarketData(
+            symbol,
+            tick.ltp,
+            tick.open || tick.ltp,
+            tick.high || tick.ltp,
+            tick.low || tick.ltp
+          );
+        }
+      }
+    } catch (error: any) {
+      logger.error('Error processing tick message', error);
+    }
+  }
+
+  /**
+   * Emit market data event
+   */
+  private emitMarketData(symbol: string, ltp: number, open: number, high: number, low: number): void {
+    // Get or create price tracking
+    let tracking = this.priceTracking.get(symbol);
+    if (!tracking) {
+      tracking = {
+        open: 0,
+        high: 0,
+        low: Infinity,
+        lastClose: 0
+      };
+      this.priceTracking.set(symbol, tracking);
+    }
+
+    // Update tracking
+    if (tracking.open === 0) {
+      tracking.open = open;
+    }
+    tracking.high = Math.max(tracking.high, high);
+    tracking.low = tracking.low === Infinity ? low : Math.min(tracking.low, low);
+
+    const marketData: MarketData = {
+      symbol,
+      ltp,
+      open: tracking.open,
+      high: tracking.high,
+      low: tracking.low,
+      close: ltp,
+      volume: 0,
+      timestamp: new Date()
+    };
+
+    this.emit('market_data', marketData);
+
+    // Throttle logging - log every 10 seconds per symbol
+    const now = Date.now();
+    const lastLog = this.lastLogTime.get(symbol) || 0;
+
+    if (now - lastLog >= this.LOG_INTERVAL_MS) {
+      this.lastLogTime.set(symbol, now);
+
+      const priceChange = tracking.open > 0 ? ((ltp - tracking.open) / tracking.open * 100) : 0;
+
+      logger.info('📊 Market data update', {
+        symbol,
+        ltp: `₹${ltp.toFixed(2)}`,
+        open: `₹${tracking.open.toFixed(2)}`,
+        high: `₹${tracking.high.toFixed(2)}`,
+        low: `₹${tracking.low.toFixed(2)}`,
+        change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}%`
+      });
+    }
+
+    // Log WebSocket summary every 10 seconds
+    if (now - this.lastSummaryTime >= this.LOG_INTERVAL_MS) {
+      const elapsedSeconds = (now - this.lastSummaryTime) / 1000;
+      const tickRate = elapsedSeconds > 0 ? this.tickCount / elapsedSeconds : 0;
+
+      logger.info('📡 WebSocket feed active', {
+        ticksReceived: this.tickCount,
+        subscribedSymbols: this.subscriptions.size,
+        activeSymbols: this.priceTracking.size,
+        tickRate: `${tickRate.toFixed(1)} ticks/sec`
+      });
+
+      // Reset counters for next interval
+      this.lastSummaryTime = now;
+      this.tickCount = 0;
+    }
+  }
+
 
   /**
    * Handle WebSocket errors
    */
   private handleError(error: Error): void {
-    logger.error('WebSocket error', error);
+    logger.error('❌ WebSocket error occurred', {
+      message: error.message,
+      code: (error as any).code,
+      stack: error.stack
+    });
     this.emit('error', error);
   }
 
@@ -240,7 +465,7 @@ export class WebSocketDataFeed extends EventEmitter {
       // Get token for symbol
       const token = await symbolTokenService.getToken(symbol);
       if (!token) {
-        logger.error('Cannot subscribe - token not found', { symbol });
+        logger.error('❌ Cannot subscribe - token not found', { symbol });
         return false;
       }
 
@@ -254,20 +479,39 @@ export class WebSocketDataFeed extends EventEmitter {
 
       // Send subscription message if connected
       if (this.isConnected && this.ws) {
+        const modeNum = mode === 'LTP' ? 1 : mode === 'QUOTE' ? 2 : 3;
+
+        // Format matches working MarketDataService
         const subscribeMessage = {
-          a: 'subscribe',
-          v: [[mode === 'LTP' ? 1 : mode === 'QUOTE' ? 2 : 3, token]]
+          action: 1, // Subscribe action
+          params: {
+            mode: modeNum,
+            tokenList: [{
+              exchangeType: 1, // NSE
+              tokens: [token]
+            }]
+          }
         };
+
+        logger.info('📡 Subscribing to symbol via WebSocket', {
+          symbol,
+          token,
+          mode,
+          modeNum,
+          message: subscribeMessage
+        });
 
         this.send(subscribeMessage);
 
-        logger.info('📡 Subscribed to symbol', { symbol, token, mode });
+        logger.info('✅ Subscribed to symbol', { symbol, token, mode });
+      } else {
+        logger.warn('⚠️ WebSocket not connected, subscription queued', { symbol });
       }
 
       return true;
 
     } catch (error: any) {
-      logger.error('Error subscribing to symbol', { symbol, error: error.message });
+      logger.error('❌ Error subscribing to symbol', { symbol, error: error.message });
       return false;
     }
   }
@@ -315,24 +559,40 @@ export class WebSocketDataFeed extends EventEmitter {
    */
   private resubscribeAll(): void {
     if (this.subscriptions.size === 0) {
+      logger.warn('⚠️ No subscriptions to resubscribe');
       return;
     }
 
     logger.info('🔄 Resubscribing to all symbols', {
-      count: this.subscriptions.size
+      count: this.subscriptions.size,
+      symbols: Array.from(this.subscriptions.keys())
     });
 
-    const subscriptionList: any[] = [];
+    const tokenList: string[] = [];
+    let modeNum = 3; // Default to SNAP_QUOTE
 
     for (const sub of this.subscriptions.values()) {
-      const modeNum = sub.mode === 'LTP' ? 1 : sub.mode === 'QUOTE' ? 2 : 3;
-      subscriptionList.push([modeNum, sub.token]);
+      tokenList.push(sub.token);
+      modeNum = sub.mode === 'LTP' ? 1 : sub.mode === 'QUOTE' ? 2 : 3;
+      logger.debug(`Adding to subscription list: ${sub.symbol} (token: ${sub.token}, mode: ${modeNum})`);
     }
 
+    // Format matches working MarketDataService
     const subscribeMessage = {
-      a: 'subscribe',
-      v: subscriptionList
+      action: 1,
+      params: {
+        mode: modeNum,
+        tokenList: [{
+          exchangeType: 1, // NSE
+          tokens: tokenList
+        }]
+      }
     };
+
+    logger.info('📤 Sending batch subscription message', {
+      subscriptionCount: tokenList.length,
+      message: subscribeMessage
+    });
 
     this.send(subscribeMessage);
   }
