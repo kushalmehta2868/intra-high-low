@@ -12,15 +12,20 @@ class Logger {
   private logLevel: LogLevel;
   private logDir: string;
   private auditDir: string;
+  private enableFileLogging: boolean;
   private enableAuditLog: boolean;
 
-  constructor(logLevel: string = 'info', enableAuditLog: boolean = true) {
+  constructor(logLevel: string = 'info', enableFileLogging: boolean = false, enableAuditLog: boolean = false) {
     this.logLevel = this.parseLogLevel(logLevel);
+    this.enableFileLogging = enableFileLogging;
+    this.enableAuditLog = enableAuditLog;
     this.logDir = path.join(process.cwd(), 'logs');
     this.auditDir = path.join(process.cwd(), 'audit');
-    this.enableAuditLog = enableAuditLog;
 
-    this.ensureDirectories();
+    // Only create directories if file logging is enabled
+    if (this.enableFileLogging || this.enableAuditLog) {
+      this.ensureDirectories();
+    }
   }
 
   private parseLogLevel(level: string): LogLevel {
@@ -49,6 +54,9 @@ class Logger {
   }
 
   private writeToFile(filename: string, message: string): void {
+    // Skip file writing if file logging is disabled
+    if (!this.enableFileLogging) return;
+
     const filepath = path.join(this.logDir, filename);
     fs.appendFileSync(filepath, message + '\n');
   }
@@ -83,6 +91,7 @@ class Logger {
   }
 
   public audit(event: string, data: any): void {
+    // Skip audit logging if disabled
     if (!this.enableAuditLog) return;
 
     const timestamp = new Date().toISOString();
@@ -92,9 +101,15 @@ class Logger {
       data
     };
 
-    const today = new Date().toISOString().split('T')[0];
-    const auditFile = path.join(this.auditDir, `audit-${today}.jsonl`);
-    fs.appendFileSync(auditFile, JSON.stringify(auditEntry) + '\n');
+    // Log to console for visibility
+    console.log(`[AUDIT] ${event}:`, JSON.stringify(auditEntry));
+
+    // Only write to file if file logging is enabled
+    if (this.enableFileLogging) {
+      const today = new Date().toISOString().split('T')[0];
+      const auditFile = path.join(this.auditDir, `audit-${today}.jsonl`);
+      fs.appendFileSync(auditFile, JSON.stringify(auditEntry) + '\n');
+    }
   }
 }
 
