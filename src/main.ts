@@ -2,11 +2,16 @@ import { TradingEngine } from './core/tradingEngine';
 import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
 import configManager from './config';
 import { logger } from './utils/logger';
+import { healthCheckServer } from './utils/healthCheck';
 
 async function main() {
   try {
     logger.info('Initializing Angel Intraday Trading Bot');
     logger.info('='.repeat(50));
+
+    // Start health check server for Render.com
+    healthCheckServer.start();
+    healthCheckServer.updateStatus(true, false);
 
     const config = configManager.getConfig();
 
@@ -91,8 +96,14 @@ async function main() {
       logger.info(`Received ${signal}, shutting down gracefully...`);
 
       try {
+        // Mark health check as unhealthy
+        healthCheckServer.setUnhealthy();
+
         await engine.stop();
         logger.info('Trading engine stopped successfully');
+
+        // Stop health check server
+        await healthCheckServer.stop();
 
         // Give a moment for cleanup
         setTimeout(() => {
@@ -112,6 +123,13 @@ async function main() {
       logger.error('Unhandled Rejection at:', { reason, promise });
       // Don't crash on unhandled rejections - log and continue
       // Most are recoverable errors (API timeouts, network issues, etc.)
+
+      // Track unhandled rejections to prevent memory leaks
+      const errorMessage = reason instanceof Error ? reason.message : String(reason);
+      if (errorMessage.includes('FATAL') || errorMessage.includes('EMFILE')) {
+        logger.error('Fatal unhandled rejection detected - initiating shutdown');
+        shutdown('UNHANDLED_REJECTION');
+      }
     });
 
     process.on('uncaughtException', async (error) => {
@@ -121,6 +139,7 @@ async function main() {
       const errorMessage = error.message || '';
       const isCritical = errorMessage.includes('EADDRINUSE') ||
                         errorMessage.includes('ENOSPC') ||
+                        errorMessage.includes('EMFILE') ||
                         errorMessage.includes('Out of memory');
 
       if (isCritical && !isShuttingDown) {
@@ -133,7 +152,24 @@ async function main() {
       }
     });
 
+    // Handle process warnings (memory leaks, etc.)
+    process.on('warning', (warning) => {
+      logger.warn('Process warning', {
+        name: warning.name,
+        message: warning.message,
+        stack: warning.stack
+      });
+
+      // Alert on MaxListenersExceededWarning (potential memory leak)
+      if (warning.name === 'MaxListenersExceededWarning') {
+        logger.error('MEMORY LEAK WARNING: Too many event listeners detected');
+      }
+    });
+
     await engine.start();
+
+    // Update health check - engine is running
+    healthCheckServer.setEngineRunning(true);
 
     logger.info('='.repeat(50));
     logger.info('Trading Bot is now running');

@@ -110,7 +110,10 @@ export class MarketDataFetcher extends EventEmitter {
       this.fetchInterval = null;
     }
 
-    logger.info('✅ Market data fetcher stopped');
+    // Remove all event listeners to prevent memory leaks
+    this.removeAllListeners();
+
+    logger.info('✅ Market data fetcher stopped and cleaned up');
   }
 
   /**

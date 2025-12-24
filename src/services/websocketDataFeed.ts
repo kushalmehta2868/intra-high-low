@@ -406,6 +406,8 @@ export class WebSocketDataFeed extends EventEmitter {
     }
 
     if (this.ws) {
+      // Remove all event listeners to prevent memory leaks
+      this.ws.removeAllListeners();
       this.ws.close();
       this.ws = null;
     }
@@ -414,7 +416,10 @@ export class WebSocketDataFeed extends EventEmitter {
     this.subscriptions.clear();
     this.priceTracking.clear();
 
-    logger.info('✅ WebSocket disconnected');
+    // Remove all event listeners from this EventEmitter
+    this.removeAllListeners();
+
+    logger.info('✅ WebSocket disconnected and cleaned up');
   }
 
   /**

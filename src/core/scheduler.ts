@@ -161,13 +161,31 @@ export class MarketScheduler extends EventEmitter {
   }
 
   public stop(): void {
-    if (this.marketStartJob) this.marketStartJob.stop();
-    if (this.marketEndJob) this.marketEndJob.stop();
-    if (this.squareOffJob) this.squareOffJob.stop();
-    if (this.priceUpdateJob) this.priceUpdateJob.stop();
-    if (this.dailySummaryJob) this.dailySummaryJob.stop();
+    if (this.marketStartJob) {
+      this.marketStartJob.stop();
+      this.marketStartJob = null;
+    }
+    if (this.marketEndJob) {
+      this.marketEndJob.stop();
+      this.marketEndJob = null;
+    }
+    if (this.squareOffJob) {
+      this.squareOffJob.stop();
+      this.squareOffJob = null;
+    }
+    if (this.priceUpdateJob) {
+      this.priceUpdateJob.stop();
+      this.priceUpdateJob = null;
+    }
+    if (this.dailySummaryJob) {
+      this.dailySummaryJob.stop();
+      this.dailySummaryJob = null;
+    }
 
-    logger.info('Market scheduler stopped');
+    // Remove all event listeners to prevent memory leaks
+    this.removeAllListeners();
+
+    logger.info('Market scheduler stopped and cleaned up');
     this.emit('scheduler_stopped');
   }
 
