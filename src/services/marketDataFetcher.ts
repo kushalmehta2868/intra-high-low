@@ -152,36 +152,89 @@ export class MarketDataFetcher extends EventEmitter {
         return;
       }
 
-      // Prepare exchangeTokens for batch request
-      const exchangeTokens: { [key: string]: string[] } = {
-        'NSE': tokens
-      };
+      // CRITICAL FIX: Split large watchlists into smaller batches to avoid API limits
+      // Angel One API may fail with too many symbols at once
+      const BATCH_SIZE = 10; // Process 10 symbols at a time
+      const symbolBatches: string[][] = [];
 
-      // Fetch all market data in one API call
-      const marketData = await this.client.getMarketData('OHLC', exchangeTokens);
-
-      if (!marketData || !marketData.fetched) {
-        logger.warn('No market data received from API');
-        return;
+      for (let i = 0; i < this.symbols.length; i += BATCH_SIZE) {
+        symbolBatches.push(this.symbols.slice(i, i + BATCH_SIZE));
       }
 
-      // Process each symbol's data
-      for (const symbol of this.symbols) {
-        const token = tokensMap.get(symbol);
-        if (!token) {
-          logger.warn(`No token found for ${symbol}`);
+      logger.debug(`Fetching market data in ${symbolBatches.length} batches (${BATCH_SIZE} symbols each)`);
+
+      // Process each batch sequentially with error recovery
+      for (let batchIndex = 0; batchIndex < symbolBatches.length; batchIndex++) {
+        const batch = symbolBatches[batchIndex];
+
+        try {
+          const batchTokens: string[] = [];
+          const batchTokensMap = new Map<string, string>();
+
+          for (const symbol of batch) {
+            const token = tokensMap.get(symbol);
+            if (token) {
+              batchTokens.push(token);
+              batchTokensMap.set(symbol, token);
+            }
+          }
+
+          if (batchTokens.length === 0) continue;
+
+          // Prepare exchangeTokens for batch request
+          const exchangeTokens: { [key: string]: string[] } = {
+            'NSE': batchTokens
+          };
+
+          // Fetch market data for this batch with timeout
+          const marketData = await Promise.race([
+            this.client.getMarketData('OHLC', exchangeTokens),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Market data fetch timeout')), 10000)
+            )
+          ]);
+
+          if (!marketData || !marketData.fetched) {
+            logger.warn(`No market data received for batch ${batchIndex + 1}/${symbolBatches.length}`);
+            continue;
+          }
+
+          // Process each symbol's data in this batch
+          for (const symbol of batch) {
+            const token = batchTokensMap.get(symbol);
+            if (!token) {
+              continue;
+            }
+
+            const symbolData = marketData.fetched.find((item: any) => item.symbolToken === token);
+            if (symbolData) {
+              this.processSymbolData(symbol, symbolData);
+            } else {
+              logger.debug(`No data received for ${symbol} in batch`);
+            }
+          }
+
+          // Small delay between batches to avoid rate limiting
+          if (batchIndex < symbolBatches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+
+        } catch (batchError: any) {
+          logger.warn(`Failed to fetch batch ${batchIndex + 1}/${symbolBatches.length}`, {
+            error: batchError.message,
+            symbols: batch
+          });
+          // Continue with next batch even if this one fails
           continue;
         }
-
-        const symbolData = marketData.fetched.find((item: any) => item.symbolToken === token);
-        if (symbolData) {
-          this.processSymbolData(symbol, symbolData);
-        } else {
-          logger.warn(`No data received for ${symbol}`);
-        }
       }
-    } catch (error) {
-      logger.error('Error fetching market data batch', error);
+
+    } catch (error: any) {
+      logger.error('Error in market data fetcher', {
+        error: error.message,
+        stack: error.stack
+      });
+      // Don't throw - let the interval retry on next cycle
     }
   }
 

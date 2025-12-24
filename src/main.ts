@@ -109,15 +109,28 @@ async function main() {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     process.on('unhandledRejection', (reason, promise) => {
-      logger.error('Unhandled Rejection', { reason, promise });
+      logger.error('Unhandled Rejection at:', { reason, promise });
+      // Don't crash on unhandled rejections - log and continue
+      // Most are recoverable errors (API timeouts, network issues, etc.)
     });
 
     process.on('uncaughtException', async (error) => {
       logger.error('Uncaught Exception', error);
-      if (!isShuttingDown) {
+
+      // Only shutdown for critical errors, not recoverable ones
+      const errorMessage = error.message || '';
+      const isCritical = errorMessage.includes('EADDRINUSE') ||
+                        errorMessage.includes('ENOSPC') ||
+                        errorMessage.includes('Out of memory');
+
+      if (isCritical && !isShuttingDown) {
+        logger.error('Critical error detected - initiating shutdown');
         await shutdown('UNCAUGHT_EXCEPTION');
+        process.exit(1);
+      } else {
+        logger.warn('Non-critical exception - continuing operation');
+        // Continue running for recoverable errors
       }
-      process.exit(1);
     });
 
     await engine.start();

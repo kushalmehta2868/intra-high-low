@@ -252,14 +252,18 @@ export class TradingEngine extends EventEmitter {
           () => this.broker.getLTP(signal.symbol),
           3, // Max 3 attempts
           500 // 500ms initial delay
-        );
+        ).catch(error => {
+          logger.error('Failed to get current price after retries', {
+            symbol: signal.symbol,
+            error: error.message
+          });
+          return null;
+        });
 
         if (!currentPrice) {
-          logger.error('Failed to get current price after retries', { symbol: signal.symbol });
-          await this.telegramBot.sendAlert(
-            '❌ Price Fetch Failed',
-            `Could not get price for ${signal.symbol} after 3 attempts. Signal aborted.`
-          );
+          logger.warn('Price fetch failed - skipping signal', { symbol: signal.symbol });
+          // Don't send alert for every failed price fetch to avoid spam
+          // The price may be temporarily unavailable due to API issues
           return;
         }
 

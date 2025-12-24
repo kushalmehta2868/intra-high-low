@@ -267,14 +267,42 @@ export class AngelOneClient {
       const response = await this.client.post('/rest/secure/angelbroking/market/v1/quote', {
         mode: mode,
         exchangeTokens: exchangeTokens
+      }, {
+        timeout: 10000 // 10 second timeout
       });
 
       if (response.data.status && response.data.data) {
         return response.data.data;
       }
+
+      // Log when API returns status=false
+      if (!response.data.status) {
+        logger.debug('Market data API returned status=false', {
+          message: response.data.message,
+          errorcode: response.data.errorcode
+        });
+      }
+
       return null;
     } catch (error: any) {
-      logger.error('Failed to get market data', error);
+      // Don't spam errors for common network issues
+      const isNetworkError = error.code === 'ECONNRESET' ||
+                            error.code === 'ETIMEDOUT' ||
+                            error.code === 'ENOTFOUND' ||
+                            error.message?.includes('timeout');
+
+      if (isNetworkError) {
+        logger.debug('Network error fetching market data', {
+          error: error.message,
+          code: error.code
+        });
+      } else {
+        logger.error('Failed to get market data', {
+          error: error.message,
+          code: error.code
+        });
+      }
+
       return null;
     }
   }
