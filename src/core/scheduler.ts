@@ -1,6 +1,7 @@
 import * as cron from 'node-cron';
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
+import { holidayCalendar } from '../services/holidayCalendar';
 
 export class MarketScheduler extends EventEmitter {
   private marketStartTime: string; // Data fetching starts (9:15 AM)
@@ -123,10 +124,9 @@ export class MarketScheduler extends EventEmitter {
     // Check if market is open for DATA FETCHING (9:15 AM - 3:30 PM)
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-    const day = istTime.getDay();
 
-    // Weekend check (Saturday = 6, Sunday = 0)
-    if (day === 0 || day === 6) {
+    // CRITICAL: Check if today is a trading day (excludes weekends and holidays)
+    if (!holidayCalendar.isTradingDay(now)) {
       return false;
     }
 
@@ -139,10 +139,9 @@ export class MarketScheduler extends EventEmitter {
     // Check if we should GENERATE SIGNALS (9:30 AM - 3:00 PM)
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-    const day = istTime.getDay();
 
-    // Weekend check (Saturday = 6, Sunday = 0)
-    if (day === 0 || day === 6) {
+    // CRITICAL: Check if today is a trading day (excludes weekends and holidays)
+    if (!holidayCalendar.isTradingDay(now)) {
       return false;
     }
 

@@ -4,6 +4,7 @@ import { AngelOneClient } from '../brokers/angelone/client';
 import { MarketData } from '../types';
 import { logger } from '../utils/logger';
 import { symbolTokenService } from './symbolTokenService';
+import { holidayCalendar } from './holidayCalendar';
 
 interface WebSocketConfig {
   url: string;
@@ -362,14 +363,14 @@ export class WebSocketDataFeed extends EventEmitter {
 
   /**
    * Check if current time is within market hours (IST timezone)
+   * Excludes weekends, NSE holidays, and checks time range
    */
   private isMarketHours(): boolean {
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-    const day = istTime.getDay();
 
-    // Weekend check (Saturday = 6, Sunday = 0)
-    if (day === 0 || day === 6) {
+    // CRITICAL: Check if today is a trading day (excludes weekends and NSE holidays)
+    if (!holidayCalendar.isTradingDay(now)) {
       return false;
     }
 
