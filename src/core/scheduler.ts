@@ -65,6 +65,11 @@ export class MarketScheduler extends EventEmitter {
     const cronExpression = `${minute} ${hour} * * 1-5`;
 
     this.marketStartJob = cron.schedule(cronExpression, () => {
+      // CRITICAL: Don't emit market_open on holidays
+      if (!holidayCalendar.isTradingDay()) {
+        logger.info('Market start time reached, but today is NOT a trading day - skipping');
+        return;
+      }
       logger.info('Market opened');
       this.emit('market_open');
     }, {
@@ -77,6 +82,11 @@ export class MarketScheduler extends EventEmitter {
     const cronExpression = `${minute} ${hour} * * 1-5`;
 
     this.marketEndJob = cron.schedule(cronExpression, () => {
+      // CRITICAL: Don't emit market_close on holidays
+      if (!holidayCalendar.isTradingDay()) {
+        logger.info('Market end time reached, but today is NOT a trading day - skipping');
+        return;
+      }
       logger.info('Market closed');
       this.emit('market_close');
     }, {
@@ -89,6 +99,11 @@ export class MarketScheduler extends EventEmitter {
     const cronExpression = `${minute} ${hour} * * 1-5`;
 
     this.squareOffJob = cron.schedule(cronExpression, () => {
+      // CRITICAL: Don't emit auto_square_off on holidays
+      if (!holidayCalendar.isTradingDay()) {
+        logger.info('Auto square-off time reached, but today is NOT a trading day - skipping');
+        return;
+      }
       logger.info('Auto square-off time reached');
       this.emit('auto_square_off');
     }, {
@@ -109,6 +124,11 @@ export class MarketScheduler extends EventEmitter {
     const cronExpression = `${minute} ${hour} * * 1-5`; // Monday-Friday at 5 PM
 
     this.dailySummaryJob = cron.schedule(cronExpression, () => {
+      // CRITICAL: Don't send daily summary on holidays
+      if (!holidayCalendar.isTradingDay()) {
+        logger.info('📊 Daily summary time reached, but today is NOT a trading day - skipping');
+        return;
+      }
       logger.info('📊 Daily summary time reached - sending report');
       this.emit('daily_summary');
     }, {

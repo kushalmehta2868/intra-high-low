@@ -3,11 +3,67 @@ import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
 import configManager from './config';
 import { logger } from './utils/logger';
 import { healthCheckServer } from './utils/healthCheck';
+import { holidayCalendar } from './services/holidayCalendar';
 
 async function main() {
   try {
     logger.info('Initializing Angel Intraday Trading Bot');
     logger.info('='.repeat(50));
+
+    // CRITICAL: Check if today is a trading day before doing anything
+    const today = new Date();
+    if (!holidayCalendar.isTradingDay(today)) {
+      const istDate = new Date(today.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const dayName = istDate.toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+      const dateStr = istDate.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+      // Check if it's a weekend or a holiday
+      const dayOfWeek = istDate.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const isHoliday = holidayCalendar.isHoliday(today);
+
+      let reason = '';
+      if (isWeekend) {
+        reason = `${dayName} (Weekend)`;
+      } else if (isHoliday) {
+        const yearHolidays = holidayCalendar.getHolidaysForYear(istDate.getFullYear());
+        const todayHoliday = yearHolidays.find(h => h.date === `${istDate.getFullYear()}-${String(istDate.getMonth() + 1).padStart(2, '0')}-${String(istDate.getDate()).padStart(2, '0')}`);
+        reason = todayHoliday ? `${todayHoliday.name} (Market Holiday)` : 'Market Holiday';
+      }
+
+      logger.info('🚫 NON-TRADING DAY DETECTED');
+      logger.info('='.repeat(50));
+      logger.info(`Date: ${dateStr}`);
+      logger.info(`Reason: ${reason}`);
+      logger.info('='.repeat(50));
+      logger.info('Bot will NOT start on non-trading days.');
+      logger.info('The bot will remain idle and consume minimal resources.');
+      logger.info('No messages, no connections, no operations will be performed.');
+
+      // Start health check server in minimal mode (for Render.com to keep service alive)
+      healthCheckServer.start();
+      healthCheckServer.updateStatus(true, false);
+
+      logger.info('Health check server started (minimal mode for hosting).');
+      logger.info('Bot is sleeping until next trading day...');
+
+      // Get next trading day info
+      const nextTradingDay = holidayCalendar.getNextTradingDay(today);
+      const nextTradingDayStr = nextTradingDay.toLocaleDateString('en-IN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        timeZone: 'Asia/Kolkata'
+      });
+      logger.info(`📅 Next trading day: ${nextTradingDayStr}`);
+      logger.info('='.repeat(50));
+
+      // Keep process alive but do nothing (for Render.com)
+      // Just wait indefinitely - no trading operations
+      await new Promise(() => {}); // Never resolves, keeps process alive
+      return;
+    }
 
     // Start health check server for Render.com
     healthCheckServer.start();
