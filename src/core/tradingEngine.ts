@@ -19,6 +19,7 @@ import { orderIdempotencyManager } from '../services/orderIdempotency';
 import { MetricsTracker } from '../services/metricsTracker';
 import { PositionReconciliationService } from '../services/positionReconciliationService';
 import { DashboardDisplay } from '../services/dashboardDisplay';
+import { healthCheckServer } from '../utils/healthCheck';
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -51,6 +52,10 @@ export class TradingEngine extends EventEmitter {
 
   // Dashboard display interval
   private dashboardDisplayInterval?: NodeJS.Timeout;
+
+  // Background reconnection
+  private reconnectionInterval?: NodeJS.Timeout;
+  private readonly RECONNECTION_INTERVAL_MS = 60 * 1000; // Try reconnecting every 1 minute
 
   constructor(config: AppConfig, watchlist?: string[]) {
     super();
@@ -814,6 +819,67 @@ export class TradingEngine extends EventEmitter {
   }
 
   /**
+   * Start background reconnection attempts
+   */
+  private startBackgroundReconnection(): void {
+    if (this.reconnectionInterval) {
+      return; // Already running
+    }
+
+    logger.info('🔄 Starting background broker reconnection attempts');
+
+    // Mark health check as reconnecting (still healthy)
+    healthCheckServer.setReconnecting(true);
+
+    this.reconnectionInterval = setInterval(async () => {
+      try {
+        logger.info('🔄 Attempting broker reconnection...');
+        const connected = await this.broker.connect();
+
+        if (connected) {
+          logger.info('✅ Broker reconnection successful!');
+
+          // Clear reconnecting status
+          healthCheckServer.setReconnecting(false);
+          healthCheckServer.setHealthy();
+
+          await this.telegramBot.sendAlert(
+            '✅ Broker Connected',
+            'Successfully reconnected to Angel One broker after authentication failure'
+          );
+
+          // Stop reconnection attempts
+          if (this.reconnectionInterval) {
+            clearInterval(this.reconnectionInterval);
+            this.reconnectionInterval = undefined;
+          }
+
+          // Resume normal operations
+          if (this.scheduler.isMarketHours()) {
+            await this.startStrategies();
+          }
+        }
+      } catch (error: any) {
+        logger.debug('Broker reconnection failed, will retry', {
+          error: error.message
+        });
+      }
+    }, this.RECONNECTION_INTERVAL_MS);
+  }
+
+  /**
+   * Stop background reconnection attempts
+   */
+  private stopBackgroundReconnection(): void {
+    if (this.reconnectionInterval) {
+      clearInterval(this.reconnectionInterval);
+      this.reconnectionInterval = undefined;
+      healthCheckServer.setReconnecting(false);
+      logger.info('🛑 Stopped background broker reconnection');
+    }
+  }
+
+  /**
    * Emergency shutdown - closes all positions and stops trading immediately
    * Used when critical failures are detected (data feed dead, etc.)
    */
@@ -864,7 +930,12 @@ export class TradingEngine extends EventEmitter {
 
     const connected = await this.broker.connect();
     if (!connected) {
-      throw new Error('Failed to connect to broker');
+      logger.error('⚠️ Failed to connect to broker - will retry in background');
+      logger.info('💡 Bot will continue running and attempt to reconnect periodically');
+
+      // Don't throw - let the bot run in degraded mode
+      // Background reconnection will be handled by scheduler or monitoring
+      this.startBackgroundReconnection();
     }
 
     this.initialBalance = await this.broker.getAccountBalance();
@@ -987,6 +1058,9 @@ export class TradingEngine extends EventEmitter {
     // IMPROVEMENT: Stop order idempotency manager
     orderIdempotencyManager.stop();
     logger.info('✅ Order idempotency manager stopped');
+
+    // Stop background reconnection if running
+    this.stopBackgroundReconnection();
 
     // Release all position locks
     positionLockManager.releaseAllLocks();

@@ -4,6 +4,8 @@ import { logger } from './logger';
 interface HealthStatus {
   isHealthy: boolean;
   engineRunning: boolean;
+  authCooldown: boolean;
+  reconnecting: boolean;
   lastUpdate: Date;
   uptime: number;
 }
@@ -18,6 +20,8 @@ export class HealthCheckServer {
   private status: HealthStatus = {
     isHealthy: true,
     engineRunning: false,
+    authCooldown: false,
+    reconnecting: false,
     lastUpdate: new Date(),
     uptime: 0
   };
@@ -43,21 +47,37 @@ export class HealthCheckServer {
       this.status.uptime = Math.floor((Date.now() - this.startTime) / 1000);
 
       if (req.url === '/health' || req.url === '/') {
-        // Return 200 OK if healthy
-        const statusCode = this.status.isHealthy ? 200 : 503;
+        // CRITICAL: Return 200 even during auth cooldown or reconnection
+        // These are temporary states, not fatal errors
+        // Only return 503 for true failures
+        const isOperational = this.status.isHealthy ||
+                             this.status.authCooldown ||
+                             this.status.reconnecting;
+        const statusCode = isOperational ? 200 : 503;
 
         res.writeHead(statusCode, {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache'
         });
 
-        res.end(JSON.stringify({
-          status: this.status.isHealthy ? 'healthy' : 'unhealthy',
+        const healthInfo = {
+          status: statusCode === 200 ? 'healthy' : 'unhealthy',
           engineRunning: this.status.engineRunning,
+          authCooldown: this.status.authCooldown,
+          reconnecting: this.status.reconnecting,
           uptime: this.status.uptime,
           lastUpdate: this.status.lastUpdate.toISOString(),
-          timestamp: new Date().toISOString()
-        }, null, 2));
+          timestamp: new Date().toISOString(),
+          message: this.status.authCooldown
+            ? 'Authentication cooldown active - will retry soon'
+            : this.status.reconnecting
+            ? 'Attempting to reconnect to broker'
+            : statusCode === 200
+            ? 'All systems operational'
+            : 'Service degraded'
+        };
+
+        res.end(JSON.stringify(healthInfo, null, 2));
       } else {
         // 404 for other routes
         res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -110,6 +130,30 @@ export class HealthCheckServer {
    */
   public setEngineRunning(running: boolean): void {
     this.status.engineRunning = running;
+    this.status.lastUpdate = new Date();
+  }
+
+  /**
+   * Set authentication cooldown status
+   */
+  public setAuthCooldown(inCooldown: boolean): void {
+    this.status.authCooldown = inCooldown;
+    // Service is still healthy during cooldown - just waiting
+    if (inCooldown) {
+      this.status.isHealthy = true;
+    }
+    this.status.lastUpdate = new Date();
+  }
+
+  /**
+   * Set reconnecting status
+   */
+  public setReconnecting(reconnecting: boolean): void {
+    this.status.reconnecting = reconnecting;
+    // Service is still healthy while reconnecting
+    if (reconnecting) {
+      this.status.isHealthy = true;
+    }
     this.status.lastUpdate = new Date();
   }
 
