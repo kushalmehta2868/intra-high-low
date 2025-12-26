@@ -275,6 +275,17 @@ export class WebSocketDataFeed extends EventEmitter {
       const low = data.readBigInt64LE(107) / 100n; // Bytes 107-115
       const close = data.readBigInt64LE(115) / 100n; // Bytes 115-123
 
+      // Extract volume (bytes 27-35, 8-byte integer)
+      // Volume is typically cumulative for the day
+      let volume = 0;
+      if (data.length >= 35) {
+        try {
+          volume = Number(data.readBigInt64LE(27));
+        } catch (e) {
+          logger.debug('Could not read volume from binary data');
+        }
+      }
+
       // Convert BigInt to Number for market data
       const ltpNum = Number(ltp);
       const openNum = Number(open);
@@ -288,7 +299,8 @@ export class WebSocketDataFeed extends EventEmitter {
         mode: subscriptionMode,
         ltp: `₹${ltpNum.toFixed(2)}`,
         high: `₹${highNum.toFixed(2)}`,
-        low: `₹${lowNum.toFixed(2)}`
+        low: `₹${lowNum.toFixed(2)}`,
+        volume
       });
 
       // Find symbol for this token
@@ -302,7 +314,7 @@ export class WebSocketDataFeed extends EventEmitter {
 
       if (symbol) {
         this.tickCount++; // Increment tick counter
-        this.emitMarketData(symbol, ltpNum, openNum, highNum, lowNum);
+        this.emitMarketData(symbol, ltpNum, openNum, highNum, lowNum, volume);
       } else {
         logger.warn('⚠️ Token not found in subscriptions', {
           token,
@@ -344,7 +356,8 @@ export class WebSocketDataFeed extends EventEmitter {
             ltp: tick.ltp,
             open: tick.open,
             high: tick.high,
-            low: tick.low
+            low: tick.low,
+            volume: tick.volume || tick.vol || 0
           });
 
           this.emitMarketData(
@@ -352,7 +365,8 @@ export class WebSocketDataFeed extends EventEmitter {
             tick.ltp,
             tick.open || tick.ltp,
             tick.high || tick.ltp,
-            tick.low || tick.ltp
+            tick.low || tick.ltp,
+            tick.volume || tick.vol || 0
           );
         }
       }
@@ -382,7 +396,7 @@ export class WebSocketDataFeed extends EventEmitter {
   /**
    * Emit market data event
    */
-  private emitMarketData(symbol: string, ltp: number, open: number, high: number, low: number): void {
+  private emitMarketData(symbol: string, ltp: number, open: number, high: number, low: number, volume: number = 0): void {
     // CRITICAL: Don't emit data outside market hours to conserve resources
     if (!this.isMarketHours()) {
       return; // Silently drop data outside market hours
@@ -414,7 +428,7 @@ export class WebSocketDataFeed extends EventEmitter {
       high: tracking.high,
       low: tracking.low,
       close: ltp,
-      volume: 0,
+      volume,
       timestamp: new Date()
     };
 

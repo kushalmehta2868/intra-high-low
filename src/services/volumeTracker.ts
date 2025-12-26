@@ -27,19 +27,21 @@ export class VolumeTracker extends EventEmitter {
 
   /**
    * Update volume data for a symbol
+   * @param symbol - Symbol to update
+   * @param volume - Cumulative volume for the day (from market data feed)
    */
   public updateVolume(symbol: string, volume: number): void {
-    // Update session volume (cumulative)
-    const currentSessionVolume = this.sessionVolume.get(symbol) || 0;
-    this.sessionVolume.set(symbol, currentSessionVolume + volume);
+    // Volume from market data is already cumulative for the session
+    // Just store it directly, don't add to previous value
+    this.sessionVolume.set(symbol, volume);
 
     // Calculate volume ratio
     const avgVolume = this.getAverageVolume(symbol);
-    const volumeRatio = avgVolume > 0 ? (currentSessionVolume + volume) / avgVolume : 0;
+    const volumeRatio = avgVolume > 0 ? volume / avgVolume : 0;
 
     const volumeData: VolumeData = {
       symbol,
-      currentVolume: currentSessionVolume + volume,
+      currentVolume: volume,
       avgVolume20Day: avgVolume,
       volumeRatio,
       lastUpdated: new Date()
@@ -54,15 +56,24 @@ export class VolumeTracker extends EventEmitter {
   public hasVolumeSurge(symbol: string): boolean {
     const data = this.volumeData.get(symbol);
 
+    // If no volume data available at all, bypass volume filter
+    // (Historical data not loaded - feature is disabled)
     if (!data) {
-      logger.warn('No volume data available for symbol', { symbol });
-      return false; // Conservative: reject if no data
+      logger.debug('No volume data available - bypassing volume filter', { symbol });
+      return true; // Allow signal when feature is not configured
+    }
+
+    // If historical volume is not set (using default fallback), bypass the filter
+    const historical = this.historicalVolume.get(symbol);
+    if (!historical || historical.length === 0) {
+      logger.debug('No historical volume data - bypassing volume filter', { symbol });
+      return true; // Allow signal when historical data is not available
     }
 
     const hasEnoughVolume = data.volumeRatio >= this.VOLUME_SURGE_THRESHOLD;
 
     if (!hasEnoughVolume) {
-      logger.info('Volume filter rejected signal', {
+      logger.info('🚫 Volume filter rejected signal', {
         symbol,
         currentVolume: data.currentVolume,
         avgVolume: data.avgVolume20Day.toFixed(0),
@@ -106,11 +117,8 @@ export class VolumeTracker extends EventEmitter {
     const historical = this.historicalVolume.get(symbol);
 
     if (!historical || historical.length === 0) {
-      // Fallback: use a default average (or could fetch from API)
-      // For now, return a high number so volume filter doesn't block unnecessarily
-      // In production, you MUST fetch real historical data
-      logger.warn('No historical volume data - using default', { symbol });
-      return 1000000; // 10 lakh shares as default
+      // Return 0 when no historical data - caller should check and bypass filter
+      return 0;
     }
 
     const sum = historical.reduce((acc, vol) => acc + vol, 0);
