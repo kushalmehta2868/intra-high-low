@@ -129,22 +129,33 @@ export class AngelOneClient {
         if ((error.response?.status === 401 || error.response?.status === 403) && !originalRequest._retry) {
           originalRequest._retry = true; // Prevent infinite retry loop
 
-          logger.warn(`Authentication error (${error.response?.status}), attempting token refresh`);
+          logger.warn(`Authentication error (${error.response?.status}), attempting token refresh`, {
+            url: originalRequest.url,
+            method: originalRequest.method
+          });
 
           // Try token refresh first (faster, doesn't use TOTP)
           let authSuccess = await this.refreshJWTToken();
 
-          // If refresh fails, try full re-login as fallback
-          if (!authSuccess) {
+          // If refresh fails, try full re-login as fallback (but check cooldown first)
+          if (!authSuccess && Date.now() >= this.loginCooldownUntil) {
             logger.warn('Token refresh failed, attempting full re-login');
             authSuccess = await this.login();
+          } else if (!authSuccess) {
+            const cooldownMin = Math.ceil((this.loginCooldownUntil - Date.now()) / 60000);
+            logger.warn('Cannot re-login: in cooldown period', {
+              remainingMinutes: cooldownMin
+            });
           }
 
           if (authSuccess) {
             logger.info('Authentication recovered, retrying request');
             return this.client.request(originalRequest);
           } else {
-            logger.error('Authentication recovery failed, request cannot be retried');
+            logger.debug('Authentication recovery failed, request will return null', {
+              url: originalRequest.url,
+              inCooldown: Date.now() < this.loginCooldownUntil
+            });
           }
         }
         return Promise.reject(error);
@@ -338,8 +349,15 @@ export class AngelOneClient {
 
   /**
    * Check if token is about to expire and refresh if needed
+   * Can be called proactively before making important API calls
    */
-  private async ensureValidToken(): Promise<boolean> {
+  public async ensureValidToken(): Promise<boolean> {
+    // If not authenticated at all, try to login
+    if (!this.jwtToken) {
+      logger.info('No JWT token found - attempting login');
+      return await this.login();
+    }
+
     const now = Date.now();
     const timeUntilExpiry = this.tokenExpiresAt - now;
     const refreshThreshold = 15 * 60 * 1000; // Refresh 15 minutes before expiry
@@ -359,9 +377,17 @@ export class AngelOneClient {
       return true;
     }
 
-    // Refresh failed - try full re-login as fallback
-    logger.warn('Token refresh failed - attempting full re-login');
-    return await this.login();
+    // Refresh failed - try full re-login as fallback (if not in cooldown)
+    if (Date.now() >= this.loginCooldownUntil) {
+      logger.warn('Token refresh failed - attempting full re-login');
+      return await this.login();
+    } else {
+      const cooldownMin = Math.ceil((this.loginCooldownUntil - Date.now()) / 60000);
+      logger.warn('Token refresh failed and in login cooldown', {
+        remainingMinutes: cooldownMin
+      });
+      return false;
+    }
   }
 
   public async placeOrder(orderRequest: AngelOrderRequest): Promise<string | null> {
@@ -454,6 +480,13 @@ export class AngelOneClient {
 
   public async getLTP(exchange: string, tradingSymbol: string, symbolToken: string): Promise<number | null> {
     try {
+      // Proactively check and refresh token before making the request
+      const tokenValid = await this.ensureValidToken();
+      if (!tokenValid) {
+        logger.warn('Token validation failed before LTP request', { symbol: tradingSymbol });
+        return null;
+      }
+
       const response = await this.client.post('/rest/secure/angelbroking/order/v1/getLtpData', {
         exchange: exchange,
         tradingsymbol: tradingSymbol,
@@ -465,7 +498,20 @@ export class AngelOneClient {
       }
       return null;
     } catch (error: any) {
-      logger.error('Failed to get LTP', error);
+      // Only log as error if it's NOT an auth issue (which is already handled by interceptor)
+      const isAuthError = error.response?.status === 401 || error.response?.status === 403;
+      if (isAuthError) {
+        logger.debug('LTP request failed due to authentication issue (already handled)', {
+          symbol: tradingSymbol,
+          status: error.response?.status
+        });
+      } else {
+        logger.error('Failed to get LTP', {
+          symbol: tradingSymbol,
+          error: error.message,
+          status: error.response?.status
+        });
+      }
       return null;
     }
   }
