@@ -11,6 +11,22 @@ interface SymbolPriceTracking {
   lastClose: number;
 }
 
+/**
+ * @deprecated This class is DEPRECATED and should NOT be used in production.
+ *
+ * REASON: This fetcher polls the API every 5 seconds causing:
+ * - High API usage (rate limit issues)
+ * - Delayed data (5 second intervals)
+ * - Unnecessary network overhead
+ *
+ * REPLACEMENT: Use WebSocketDataFeed + marketDataCache instead:
+ * - Real-time streaming data (millisecond updates)
+ * - Zero API calls for price data
+ * - Includes OHLC + Volume
+ * - Automatic caching via marketDataCache
+ *
+ * See: websocketDataFeed.ts and marketDataCache.ts
+ */
 export class MarketDataFetcher extends EventEmitter {
   private client: AngelOneClient;
   private symbols: string[] = []; // Watchlist symbols

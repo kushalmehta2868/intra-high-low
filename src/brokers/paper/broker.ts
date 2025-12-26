@@ -5,6 +5,7 @@ import { AngelOneClient } from '../angelone/client';
 import { TradingTelegramBot } from '../../telegram/bot';
 import { TelegramConfig } from '../../types';
 import { WebSocketDataFeed } from '../../services/websocketDataFeed';
+import { marketDataCache } from '../../services/marketDataCache';
 import { symbolTokenService } from '../../services/symbolTokenService';
 import { configManager } from '../../config';
 
@@ -88,8 +89,11 @@ export class PaperBroker extends BaseBroker {
             this.marketEndTime
           );
 
-          // Forward market data events
+          // Forward market data events AND update cache
           this.wsDataFeed.on('market_data', (data: MarketData) => {
+            // Update cache for instant access (eliminates API calls)
+            marketDataCache.update(data);
+
             // Emit market data for strategies to consume
             this.emit('market_data', data);
           });
@@ -304,12 +308,26 @@ export class PaperBroker extends BaseBroker {
   }
 
   /**
-   * Get real LTP from Angel One
+   * Get real LTP from WebSocket cache or Angel One API (fallback)
    */
   private async getRealLTP(symbol: string): Promise<number | null> {
+    // OPTIMIZATION: Try cache first (WebSocket data) - eliminates API call
+    const cachedLTP = marketDataCache.getLTP(symbol);
+    if (cachedLTP !== null) {
+      logger.debug('LTP from cache (WebSocket)', {
+        symbol,
+        ltp: `₹${cachedLTP.toFixed(2)}`,
+        source: 'WebSocket Cache'
+      });
+      return cachedLTP;
+    }
+
+    // Fallback: Use API only if cache miss (no WebSocket data yet)
     if (!this.angelClient || !this.angelClient.isAuthenticated()) {
       return null;
     }
+
+    logger.debug('Cache miss - fetching LTP from API', { symbol });
 
     try {
       const symbolToken = await symbolTokenService.getToken(symbol);

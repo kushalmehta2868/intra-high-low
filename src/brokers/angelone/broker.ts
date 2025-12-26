@@ -5,6 +5,7 @@ import { BrokerConfig } from '../../types';
 import { logger } from '../../utils/logger';
 import { symbolTokenService } from '../../services/symbolTokenService';
 import { WebSocketDataFeed } from '../../services/websocketDataFeed';
+import { marketDataCache } from '../../services/marketDataCache';
 import { configManager } from '../../config';
 
 interface PositionMetadata {
@@ -47,8 +48,12 @@ export class AngelOneBroker extends BaseBroker {
         if (this.watchlist.length > 0) {
           this.wsDataFeed = new WebSocketDataFeed(this.client);
 
-          // Forward market data events from WebSocket to broker listeners
+          // Forward market data events from WebSocket to broker listeners AND cache
           this.wsDataFeed.on('market_data', (data: MarketData) => {
+            // Update cache for instant access (eliminates API calls)
+            marketDataCache.update(data);
+
+            // Forward to strategies
             this.emitMarketData(data);
           });
 
@@ -330,6 +335,20 @@ export class AngelOneBroker extends BaseBroker {
       logger.error('Broker not connected');
       return null;
     }
+
+    // OPTIMIZATION: Try cache first (WebSocket data) - eliminates API call
+    const cachedLTP = marketDataCache.getLTP(symbol);
+    if (cachedLTP !== null) {
+      logger.debug('LTP from cache (WebSocket)', {
+        symbol,
+        ltp: `₹${cachedLTP.toFixed(2)}`,
+        source: 'WebSocket Cache'
+      });
+      return cachedLTP;
+    }
+
+    // Fallback: Use API only if cache miss (no WebSocket data yet)
+    logger.debug('Cache miss - fetching LTP from API', { symbol });
 
     try {
       const symbolToken = await this.getSymbolToken(symbol);
