@@ -127,6 +127,7 @@ export class TradingEngine extends EventEmitter {
           ltp: `₹${data.ltp.toFixed(2)}`,
           high: `₹${data.high.toFixed(2)}`,
           low: `₹${data.low.toFixed(2)}`,
+          volume: data.volume > 0 ? data.volume.toLocaleString() : 'N/A',
           strategies: this.strategies.size
         });
       }

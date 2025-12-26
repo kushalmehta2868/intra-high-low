@@ -170,6 +170,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         status = '❄️  Near Low Breakout!';
       }
 
+      // Get volume stats
+      const volumeStats = volumeTracker.getVolumeStats(data.symbol);
+      const volumeInfo = volumeStats
+        ? `${volumeStats.currentVolume.toLocaleString()} (${volumeStats.volumeRatio.toFixed(2)}x avg)`
+        : data.volume > 0 ? data.volume.toLocaleString() : 'N/A';
+
       logger.info(`📊 [${data.symbol}] Price Levels Check`, {
         symbol: data.symbol,
         status: status,
@@ -177,6 +183,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
         dayLow: `₹${state.dayLow !== Infinity ? state.dayLow.toFixed(2) : 'N/A'}`,
         open: `₹${state.open.toFixed(2)}`,
+        volume: volumeInfo,
         distanceToHigh: `${distanceToHigh.toFixed(2)}%`,
         distanceToLow: `${distanceToLow.toFixed(2)}%`,
         hasBrokenHigh: state.hasBrokenHighToday,

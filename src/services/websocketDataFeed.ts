@@ -449,6 +449,7 @@ export class WebSocketDataFeed extends EventEmitter {
         open: `₹${tracking.open.toFixed(2)}`,
         high: `₹${tracking.high.toFixed(2)}`,
         low: `₹${tracking.low.toFixed(2)}`,
+        volume: volume > 0 ? volume.toLocaleString() : 'N/A',
         change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}%`
       });
     }
