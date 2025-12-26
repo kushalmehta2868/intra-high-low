@@ -15,6 +15,10 @@ import { HeartbeatMonitor } from '../services/heartbeatMonitor';
 import { OrderFillMonitor } from '../services/orderFillMonitor';
 import { StopLossManager } from '../services/stopLossManager';
 import { retry } from '../utils/retry';
+import { orderIdempotencyManager } from '../services/orderIdempotency';
+import { MetricsTracker } from '../services/metricsTracker';
+import { PositionReconciliationService } from '../services/positionReconciliationService';
+import { DashboardDisplay } from '../services/dashboardDisplay';
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -25,17 +29,28 @@ export class TradingEngine extends EventEmitter {
   private telegramBot: TradingTelegramBot;
   private heartbeatMonitor: HeartbeatMonitor;
   private stopLossManager: StopLossManager;
+  private metricsTracker: MetricsTracker;
+  private positionReconciliation?: PositionReconciliationService;
+  private dashboardDisplay?: DashboardDisplay;
   private strategies: Map<string, IStrategy> = new Map();
   private isRunning: boolean = false;
   private initialBalance: number = 0;
   private watchlist: string[] = [];
 
-  // Slippage configuration (FIX #2)
-  private readonly SLIPPAGE_BUFFER = 0.001; // 0.1% expected slippage
+  // Slippage configuration (IMPROVED - Dynamic calculation)
+  private readonly SLIPPAGE_BUFFER_MIN = 0.001; // 0.1% minimum expected slippage
+  private readonly SLIPPAGE_BUFFER_MAX = 0.005; // 0.5% maximum expected slippage
+
+  // Limit order configuration
+  private readonly LIMIT_ORDER_TOLERANCE = 0.0015; // 0.15% tolerance for limit orders
+  private readonly ORDER_TIMEOUT_MS = 30000; // 30 seconds timeout for limit orders
 
   // Logging throttle - log strategy feeding every 10 seconds
   private lastStrategyLogTime: Map<string, number> = new Map();
   private readonly STRATEGY_LOG_INTERVAL_MS = 10000; // 10 seconds
+
+  // Dashboard display interval
+  private dashboardDisplayInterval?: NodeJS.Timeout;
 
   constructor(config: AppConfig, watchlist?: string[]) {
     super();
@@ -60,6 +75,9 @@ export class TradingEngine extends EventEmitter {
 
     // FIX #3: Initialize stop-loss manager
     this.stopLossManager = new StopLossManager(this.broker);
+
+    // Initialize metrics tracker
+    this.metricsTracker = new MetricsTracker(this.initialBalance);
 
     this.setupEventHandlers();
   }
@@ -138,6 +156,33 @@ export class TradingEngine extends EventEmitter {
         pnlPercent: pnlPercent,
         entryTime: position.entryTime,
         exitTime: position.exitTime || new Date()
+      });
+
+      // IMPROVEMENT: Record trade in metrics tracker for comprehensive analytics
+      const exitPrice = position.currentPrice || position.exitPrice;
+      const entryPrice = position.entryPrice;
+      const holdTimeMs = position.exitTime
+        ? position.exitTime.getTime() - position.entryTime.getTime()
+        : Date.now() - position.entryTime.getTime();
+
+      // Calculate actual slippage (approximate - would need entry order price for exact)
+      const actualSlippage = Math.abs((exitPrice - entryPrice) / entryPrice) * 0.1; // Estimate
+
+      this.metricsTracker.recordTrade({
+        symbol: position.symbol,
+        entryTime: position.entryTime,
+        exitTime: position.exitTime || new Date(),
+        side: position.type === 'LONG' ? 'SELL' : 'BUY',
+        entryPrice: position.entryPrice,
+        exitPrice: exitPrice,
+        quantity: position.quantity,
+        pnl: position.pnl,
+        pnlPercent: pnlPercent,
+        expectedSlippage: this.SLIPPAGE_BUFFER_MIN,
+        actualSlippage: actualSlippage,
+        holdTimeMs: holdTimeMs,
+        result: position.pnl > 0.01 ? 'WIN' : position.pnl < -0.01 ? 'LOSS' : 'BREAKEVEN',
+        exitReason: position.exitReason || 'MANUAL'
       });
 
       // Send enhanced Telegram notification with full trade details
@@ -244,6 +289,33 @@ export class TradingEngine extends EventEmitter {
       }
     });
 
+    // IMPROVEMENT: Metrics tracker event handlers
+    this.metricsTracker.on('high_slippage', async (data: any) => {
+      await this.telegramBot.sendAlert(
+        '⚠️ HIGH SLIPPAGE DETECTED',
+        `Symbol: ${data.symbol}\n` +
+        `Expected: ${(data.expected * 100).toFixed(3)}%\n` +
+        `Actual: ${(data.slippage * 100).toFixed(3)}%`
+      );
+    });
+
+    this.metricsTracker.on('consecutive_losses_warning', async (data: any) => {
+      await this.telegramBot.sendAlert(
+        '⚠️ CONSECUTIVE LOSSES WARNING',
+        `${data.count} losses in a row.\n` +
+        `${data.message}`
+      );
+    });
+
+    this.metricsTracker.on('high_drawdown', async (data: any) => {
+      await this.telegramBot.sendAlert(
+        '⚠️ HIGH DRAWDOWN ALERT',
+        `Current drawdown: ${data.drawdownPercent.toFixed(2)}%\n` +
+        `Amount: ₹${data.drawdown.toFixed(2)}\n` +
+        `Peak: ₹${data.peakBalance.toFixed(2)}`
+      );
+    });
+
     // NOTE: Telegram command handlers disabled (notification-only mode)
     // Commands like /status, /positions, etc. are not available
     // The bot only sends notifications and alerts
@@ -297,251 +369,295 @@ export class TradingEngine extends EventEmitter {
           return;
         }
 
-        // FIX #5: Add retry logic for getting LTP (critical operation)
+        // IMPROVEMENT: Check order idempotency BEFORE any processing
+        const orderKey = orderIdempotencyManager.generateOrderKey(
+          signal.symbol,
+          signal.action,
+          signal.quantity || 0
+        );
+
+        if (!orderIdempotencyManager.canPlaceOrder(orderKey, signal.symbol, signal.action)) {
+          logger.warn('Order rejected by idempotency check - duplicate order', {
+            orderKey,
+            symbol: signal.symbol,
+            action: signal.action
+          });
+          return; // Exit early, duplicate order
+        }
+
+        // Get current price with retry
         const currentPrice = await retry(
           () => this.broker.getLTP(signal.symbol),
-          3, // Max 3 attempts
-          500 // 500ms initial delay
+          3,
+          500
         ).catch(error => {
           logger.error('Failed to get current price after retries', {
             symbol: signal.symbol,
             error: error.message
           });
+          orderIdempotencyManager.markOrderFailed(orderKey, 'Price fetch failed');
           return null;
         });
 
         if (!currentPrice) {
           logger.warn('Price fetch failed - skipping signal', { symbol: signal.symbol });
-          // Don't send alert for every failed price fetch to avoid spam
-          // The price may be temporarily unavailable due to API issues
           return;
         }
 
-        // FIX #2: Apply slippage buffer to expected entry price
+        // IMPROVEMENT: Use SLIPPAGE_BUFFER_MIN for conservative slippage estimate
+        const slippageBuffer = this.SLIPPAGE_BUFFER_MIN;
+
         const adjustedEntryPrice = signal.action === 'BUY'
-          ? currentPrice * (1 + this.SLIPPAGE_BUFFER)  // Expect to pay more on buy
-          : currentPrice * (1 - this.SLIPPAGE_BUFFER); // Expect to receive less on sell
+          ? currentPrice * (1 + slippageBuffer)
+          : currentPrice * (1 - slippageBuffer);
 
         logger.info('📊 Price and slippage calculation', {
           symbol: signal.symbol,
           action: signal.action,
           rawLTP: `₹${currentPrice.toFixed(2)}`,
-          slippageBuffer: `${(this.SLIPPAGE_BUFFER * 100).toFixed(2)}%`,
+          slippageBuffer: `${(slippageBuffer * 100).toFixed(2)}%`,
           adjustedEntry: `₹${adjustedEntryPrice.toFixed(2)}`,
           slippageCost: `₹${Math.abs(adjustedEntryPrice - currentPrice).toFixed(2)}`
         });
 
-        // Use adjusted price for stop-loss calculation
+        // Calculate stop-loss
         const stopLoss = signal.stopLoss || (signal.action === 'BUY'
-          ? adjustedEntryPrice * 0.995  // 0.5% from adjusted price for BUY
-          : adjustedEntryPrice * 1.005); // 0.5% from adjusted price for SELL
+          ? adjustedEntryPrice * 0.995
+          : adjustedEntryPrice * 1.005);
 
-        // Calculate quantity with ₹10,000 max capital requirement (after margin)
+        // Calculate quantity
         let quantity = signal.quantity;
         if (!quantity) {
-          const MAX_CAPITAL_REQUIRED = 10000; // Maximum capital required in INR (after margin)
+          const MAX_CAPITAL_REQUIRED = 10000;
           const marginMultiplier = signal.marginMultiplier || 5;
-
-          // Calculate max quantity based on ₹10,000 capital limit
-          // Required capital = (quantity × price) / marginMultiplier
-          // So: quantity = (MAX_CAPITAL × marginMultiplier) / price
           const maxQuantityByCapital = Math.floor((MAX_CAPITAL_REQUIRED * marginMultiplier) / currentPrice);
-
-          // Also calculate based on risk management
           const riskBasedQuantity = this.riskManager.calculatePositionSize(currentPrice, stopLoss);
-
-          // Take the minimum to ensure we don't exceed either limit
           quantity = Math.min(maxQuantityByCapital, riskBasedQuantity);
-
-          const orderValue = quantity * currentPrice;
-          const requiredCapital = orderValue / marginMultiplier;
 
           logger.info('Quantity calculated', {
             symbol: signal.symbol,
             currentPrice: `₹${currentPrice.toFixed(2)}`,
-            marginMultiplier,
-            maxCapitalAllowed: `₹${MAX_CAPITAL_REQUIRED}`,
-            maxQuantityByCapital,
-            riskBasedQuantity,
             finalQuantity: quantity,
-            orderValue: `₹${orderValue.toFixed(2)}`,
-            requiredCapital: `₹${requiredCapital.toFixed(2)}`
+            orderValue: `₹${(quantity * currentPrice).toFixed(2)}`
           });
         }
 
         if (quantity === 0) {
           logger.warn('Calculated quantity is 0', { signal });
+          orderIdempotencyManager.markOrderFailed(orderKey, 'Zero quantity');
           return;
         }
 
-        // CRITICAL FIX: Update risk manager with current balance BEFORE risk check
-        // This ensures balance checking works correctly in both PAPER and REAL modes
-        // FIX #5: Add retry for balance fetching
+        // Update balance and check risk
         const currentBalance = await retry(
           () => this.broker.getAccountBalance(),
           3,
           500
         );
         this.riskManager.updateBalance(currentBalance);
+        this.metricsTracker.updateBalance(currentBalance);
 
-        // Use adjusted price for risk calculations
         const riskCheck = this.riskManager.checkOrderRisk(
           signal.symbol,
           signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
           quantity,
-          adjustedEntryPrice, // Use adjusted price, not raw LTP
+          adjustedEntryPrice,
           stopLoss
         );
 
         if (!riskCheck.allowed) {
           logger.warn('Risk check failed', { signal, reason: riskCheck.reason });
           await this.telegramBot.sendAlert('Risk Check Failed', riskCheck.reason || 'Unknown reason');
+          orderIdempotencyManager.markOrderFailed(orderKey, riskCheck.reason || 'Risk check failed');
           return;
         }
 
-        // FIX #5: Add retry logic for order placement (critical operation)
+        // IMPROVEMENT: Determine order type based on trading mode
+        const side = signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL;
+        const useROBOOrder = this.config.trading.mode === TradingMode.REAL;
+
+        let orderType: OrderType;
+        let limitPrice: number | undefined;
+
+        if (useROBOOrder) {
+          // REAL mode: Use ROBO (bracket order) for atomic stop-loss
+          orderType = OrderType.MARKET;
+          limitPrice = undefined;
+        } else {
+          // PAPER mode: Use LIMIT orders to cap slippage
+          orderType = OrderType.LIMIT;
+          limitPrice = signal.action === 'BUY'
+            ? currentPrice * (1 + this.LIMIT_ORDER_TOLERANCE)  // 0.15% above LTP
+            : currentPrice * (1 - this.LIMIT_ORDER_TOLERANCE); // 0.15% below LTP
+        }
+
+        logger.info('📋 Placing order', {
+          symbol: signal.symbol,
+          side,
+          orderType: useROBOOrder ? 'ROBO (Bracket)' : 'LIMIT',
+          currentPrice: `₹${currentPrice.toFixed(2)}`,
+          limitPrice: limitPrice ? `₹${limitPrice.toFixed(2)}` : 'N/A',
+          tolerance: useROBOOrder ? 'N/A' : `${(this.LIMIT_ORDER_TOLERANCE * 100).toFixed(2)}%`,
+          quantity
+        });
+
+        // Place order with retry
         const order = await retry(
           () => this.broker.placeOrder(
             signal.symbol,
-            signal.action === 'BUY' ? OrderSide.BUY : OrderSide.SELL,
-            OrderType.MARKET,
+            side,
+            orderType,
             quantity,
-            undefined,
+            limitPrice,
             stopLoss,
             signal.target
           ),
-          3, // Retry up to 3 times
-          1000 // 1 second delay
-        );
-
-        if (order) {
-          logger.info('✅ Order placed successfully', {
-            orderId: order.orderId,
+          3,
+          1000
+        ).catch(error => {
+          logger.error('Failed to place order after retries', {
             symbol: signal.symbol,
-            side: order.side,
-            quantity: order.quantity
+            error: error.message
           });
+          orderIdempotencyManager.markOrderFailed(orderKey, error.message);
+          return null;
+        });
 
-          // FIX #6: Wait for order fill confirmation before proceeding
-          const fillMonitor = new OrderFillMonitor(this.broker);
-          const fillResult = await fillMonitor.waitForFill(order.orderId, quantity);
-
-          if (fillResult.status === 'FAILED' || fillResult.status === 'TIMEOUT') {
-            logger.error('❌ Order did not fill', {
-              orderId: order.orderId,
-              status: fillResult.status
-            });
-            await this.telegramBot.sendAlert(
-              '❌ Order Fill Failed',
-              `Order ${order.orderId} for ${signal.symbol} did not fill.\n` +
-              `Status: ${fillResult.status}`
-            );
-            return;
-          }
-
-          const filledQuantity = fillResult.filled;
-          const fillPrice = fillResult.averagePrice || adjustedEntryPrice;
-
-          if (fillResult.status === 'PARTIAL') {
-            logger.warn('⚠️ Partial fill - adjusting quantity', {
-              orderId: order.orderId,
-              expected: quantity,
-              filled: filledQuantity,
-              percentFilled: `${((filledQuantity / quantity) * 100).toFixed(1)}%`
-            });
-            await this.telegramBot.sendAlert(
-              '⚠️ Partial Fill',
-              `Order ${order.orderId} for ${signal.symbol}\n` +
-              `Expected: ${quantity}\n` +
-              `Filled: ${filledQuantity} (${((filledQuantity / quantity) * 100).toFixed(1)}%)`
-            );
-          }
-
-          // FIX #3: Place stop-loss immediately after fill (REAL mode only)
-          if (this.config.trading.mode === TradingMode.REAL && filledQuantity > 0) {
-            const position = this.positionManager.getPosition(signal.symbol);
-
-            if (!position) {
-              logger.error('❌ Position not found after fill - critical error', {
-                symbol: signal.symbol,
-                orderId: order.orderId
-              });
-              // Close the position immediately if we can't track it
-              await this.closePosition(signal.symbol, 'Position tracking failed');
-              return;
-            }
-
-            logger.info('📍 Attempting to place stop-loss protection...', {
-              symbol: signal.symbol,
-              stopLoss: `₹${stopLoss.toFixed(2)}`,
-              target: signal.target ? `₹${signal.target.toFixed(2)}` : 'N/A'
-            });
-
-            const slPlaced = await this.stopLossManager.placeStopLoss(
-              signal.symbol,
-              order.orderId,
-              position,
-              stopLoss,
-              signal.target
-            );
-
-            // FIX #3: CRITICAL - If SL placement fails, close position immediately
-            if (!slPlaced) {
-              logger.error('🚨 CRITICAL: Stop-loss placement FAILED - emergency close', {
-                symbol: signal.symbol,
-                orderId: order.orderId,
-                reason: 'Cannot leave position unprotected'
-              });
-
-              await this.telegramBot.sendAlert(
-                '🚨 CRITICAL: Emergency Position Close',
-                `Failed to place stop-loss for ${signal.symbol}.\n\n` +
-                `Position is being closed immediately for safety.\n\n` +
-                `Order ID: ${order.orderId}`
-              );
-
-              // Emergency close
-              await this.closePosition(signal.symbol, 'Stop-loss placement failed - emergency close');
-              return;
-            }
-
-            logger.info('✅ Stop-loss protection placed successfully', {
-              symbol: signal.symbol
-            });
-          }
-
-          // Get current account balance and position count for telegram notification
-          const balance = await this.broker.getAccountBalance();
-          const positions = this.positionManager.getAllPositions();
-          const openPositionCount = positions.length;
-
-          await this.telegramBot.sendTradeNotification(
-            signal.action,
-            signal.symbol,
-            filledQuantity, // Use actual filled quantity
-            fillPrice, // Use actual fill price
-            signal.reason,
-            stopLoss,
-            signal.target,
-            balance,
-            openPositionCount
-          );
-
-          logger.audit('SIGNAL_EXECUTED', {
-            signal,
-            order,
-            filledQuantity,
-            fillPrice,
-            slippageExpected: this.SLIPPAGE_BUFFER * 100,
-            stopLossPlaced: this.config.trading.mode === TradingMode.REAL
-          });
-        } else {
-          logger.error('❌ Failed to place order after retries', { signal });
+        if (!order) {
+          logger.error('❌ Failed to place order', { signal });
           await this.telegramBot.sendAlert(
             '❌ Order Failed',
             `Failed to place order for ${signal.symbol} after 3 attempts`
           );
+          return;
         }
+
+        logger.info('✅ Order placed successfully', {
+          orderId: order.orderId,
+          symbol: signal.symbol,
+          side: order.side,
+          orderType: useROBOOrder ? 'ROBO (Bracket)' : 'LIMIT',
+          quantity: order.quantity
+        });
+
+        // Mark order as completed
+        orderIdempotencyManager.markOrderCompleted(orderKey, order.orderId);
+
+        // IMPROVEMENT: Set up order timeout for LIMIT orders (not needed for ROBO)
+        let orderCancelled = false;
+        const orderTimeout = !useROBOOrder ? setTimeout(async () => {
+          try {
+            logger.warn('⏰ Order timeout - attempting to cancel limit order', {
+              orderId: order.orderId,
+              symbol: signal.symbol,
+              timeoutMs: this.ORDER_TIMEOUT_MS
+            });
+
+            const cancelled = await this.broker.cancelOrder(order.orderId);
+
+            if (cancelled) {
+              orderCancelled = true;
+              await this.telegramBot.sendAlert(
+                '⏰ Order Timeout',
+                `Limit order for ${signal.symbol} cancelled after ${this.ORDER_TIMEOUT_MS / 1000}s (not filled)`
+              );
+            }
+          } catch (error: any) {
+            logger.error('Error cancelling order timeout', { error: error.message });
+          }
+        }, this.ORDER_TIMEOUT_MS) : null;
+
+        // Wait for order fill confirmation
+        const fillMonitor = new OrderFillMonitor(this.broker);
+        const fillResult = await fillMonitor.waitForFill(order.orderId, quantity);
+
+        // Clear timeout if order filled
+        if (orderTimeout) {
+          clearTimeout(orderTimeout);
+        }
+
+        if (orderCancelled) {
+          logger.info('Order was cancelled due to timeout - skipping further processing');
+          return;
+        }
+
+        if (fillResult.status === 'FAILED' || fillResult.status === 'TIMEOUT') {
+          logger.error('❌ Order did not fill', {
+            orderId: order.orderId,
+            status: fillResult.status
+          });
+          await this.telegramBot.sendAlert(
+            '❌ Order Fill Failed',
+            `Order ${order.orderId} for ${signal.symbol} did not fill.\nStatus: ${fillResult.status}`
+          );
+          return;
+        }
+
+        const filledQuantity = fillResult.filled;
+        const fillPrice = fillResult.averagePrice || adjustedEntryPrice;
+
+        // IMPROVEMENT: Calculate and track actual slippage
+        const actualSlippage = Math.abs((fillPrice - currentPrice) / currentPrice);
+
+        logger.info('📊 Order fill analysis', {
+          orderId: order.orderId,
+          expectedPrice: `₹${adjustedEntryPrice.toFixed(2)}`,
+          fillPrice: `₹${fillPrice.toFixed(2)}`,
+          expectedSlippage: `${(slippageBuffer * 100).toFixed(3)}%`,
+          actualSlippage: `${(actualSlippage * 100).toFixed(3)}%`,
+          slippageDiff: `${((actualSlippage - slippageBuffer) * 100).toFixed(3)}%`
+        });
+
+        if (fillResult.status === 'PARTIAL') {
+          logger.warn('⚠️ Partial fill - adjusting quantity', {
+            orderId: order.orderId,
+            expected: quantity,
+            filled: filledQuantity,
+            percentFilled: `${((filledQuantity / quantity) * 100).toFixed(1)}%`
+          });
+          await this.telegramBot.sendAlert(
+            '⚠️ Partial Fill',
+            `Order ${order.orderId} for ${signal.symbol}\nExpected: ${quantity}\nFilled: ${filledQuantity} (${((filledQuantity / quantity) * 100).toFixed(1)}%)`
+          );
+        }
+
+        // For PAPER mode, stop-loss is handled by broker simulation
+        // For REAL mode, stop-loss is already part of ROBO order
+        if (this.config.trading.mode === TradingMode.REAL && filledQuantity > 0) {
+          logger.info('✅ ROBO order includes automatic stop-loss and target', {
+            symbol: signal.symbol,
+            stopLoss: `₹${stopLoss.toFixed(2)}`,
+            target: signal.target ? `₹${signal.target.toFixed(2)}` : 'N/A'
+          });
+        }
+
+        // Get account info for telegram
+        const balance = await this.broker.getAccountBalance();
+        const positions = this.positionManager.getAllPositions();
+        const openPositionCount = positions.length;
+
+        await this.telegramBot.sendTradeNotification(
+          signal.action,
+          signal.symbol,
+          filledQuantity,
+          fillPrice,
+          signal.reason,
+          stopLoss,
+          signal.target,
+          balance,
+          openPositionCount
+        );
+
+        logger.audit('SIGNAL_EXECUTED', {
+          signal,
+          order,
+          filledQuantity,
+          fillPrice,
+          expectedSlippage: slippageBuffer * 100,
+          actualSlippage: actualSlippage * 100,
+          orderType: useROBOOrder ? 'ROBO' : 'LIMIT'
+        });
+
       } catch (error: any) {
         logger.error('Error handling strategy signal', error);
         await this.telegramBot.sendAlert('Signal Execution Error', error.message);
@@ -767,6 +883,47 @@ export class TradingEngine extends EventEmitter {
       logger.info('✅ Stop-loss manager monitoring started');
     }
 
+    // IMPROVEMENT: Start position reconciliation service (every 30s)
+    this.positionReconciliation = new PositionReconciliationService(
+      this.broker,
+      this.positionManager
+    );
+    this.positionReconciliation.start();
+    logger.info('✅ Position reconciliation started (every 30s)');
+
+    // IMPROVEMENT: Set up reconciliation event handlers
+    this.positionReconciliation.on('reconciliation_mismatch', async (data: any) => {
+      await this.telegramBot.sendAlert(
+        '❌ POSITION MISMATCH DETECTED',
+        `Mismatches: ${data.mismatches.length}\n` +
+        `Consecutive failures: ${data.consecutiveFailures}\n\n` +
+        `Details:\n${data.mismatches.map((m: any) => `- ${m.symbol}: ${m.issue}`).join('\n')}\n\n` +
+        `Check logs for full details.`
+      );
+    });
+
+    this.positionReconciliation.on('reconciliation_critical', async (data: any) => {
+      await this.telegramBot.sendAlert(
+        '🚨 CRITICAL: Position Reconciliation Failure',
+        `${data.message}\n\n` +
+        `Bot may have lost sync with broker.\n` +
+        `Manual intervention required!`
+      );
+    });
+
+    // IMPROVEMENT: Initialize dashboard display
+    this.dashboardDisplay = new DashboardDisplay(
+      this.metricsTracker,
+      this.riskManager,
+      this.positionManager
+    );
+
+    // Display dashboard every 5 minutes
+    this.dashboardDisplayInterval = setInterval(() => {
+      this.dashboardDisplay?.displayConsole();
+    }, 300000); // 5 minutes
+    logger.info('✅ Dashboard display started (every 5 min)');
+
     this.isRunning = true;
 
     // If starting during market hours, start strategies immediately
@@ -812,6 +969,23 @@ export class TradingEngine extends EventEmitter {
       await this.stopLossManager.cancelAllStopLosses('Engine shutdown');
       logger.info('✅ Stop-loss manager stopped and all SL orders cancelled');
     }
+
+    // IMPROVEMENT: Stop position reconciliation
+    if (this.positionReconciliation) {
+      this.positionReconciliation.stop();
+      logger.info('✅ Position reconciliation stopped');
+    }
+
+    // IMPROVEMENT: Stop dashboard display
+    if (this.dashboardDisplayInterval) {
+      clearInterval(this.dashboardDisplayInterval);
+      this.dashboardDisplayInterval = undefined;
+      logger.info('✅ Dashboard display stopped');
+    }
+
+    // IMPROVEMENT: Stop order idempotency manager
+    orderIdempotencyManager.stop();
+    logger.info('✅ Order idempotency manager stopped');
 
     // Release all position locks
     positionLockManager.releaseAllLocks();

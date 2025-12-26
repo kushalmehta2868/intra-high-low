@@ -2,6 +2,7 @@ import { BaseStrategy } from './base';
 import { StrategyContext, MarketData, StrategySignal, Position } from '../types';
 import { logger } from '../utils/logger';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
+import { volumeTracker } from '../services/volumeTracker';
 
 interface SymbolState {
   // Current day OHLC
@@ -63,6 +64,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     const state = this.symbolStates.get(data.symbol);
     if (!state) return;
+
+    // Update volume tracker with current tick volume
+    if (data.volume) {
+      volumeTracker.updateVolume(data.symbol, data.volume);
+    }
 
     // Check if it's a new trading day and reset accordingly
     this.checkAndResetForNewDay(state);
@@ -210,12 +216,32 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
+      // CRITICAL: Check volume surge before generating signal
+      if (!volumeTracker.hasVolumeSurge(data.symbol)) {
+        logger.info(`🚫 BUY signal rejected - insufficient volume`, {
+          symbol: data.symbol,
+          volumeRatio: volumeTracker.getVolumeRatio(data.symbol).toFixed(2) + 'x',
+          required: '1.5x'
+        });
+        return; // Reject signal without setting hasBrokenHighToday
+      }
+
       state.hasBrokenHighToday = true;
       this.on_buy_signal(data.symbol, ltp, dayHigh, prevLtp);
       return;
     }
 
     if (crossedBelowLow && !state.hasBrokenLowToday) {
+      // CRITICAL: Check volume surge before generating signal
+      if (!volumeTracker.hasVolumeSurge(data.symbol)) {
+        logger.info(`🚫 SELL signal rejected - insufficient volume`, {
+          symbol: data.symbol,
+          volumeRatio: volumeTracker.getVolumeRatio(data.symbol).toFixed(2) + 'x',
+          required: '1.5x'
+        });
+        return; // Reject signal without setting hasBrokenLowToday
+      }
+
       state.hasBrokenLowToday = true;
       this.on_sell_signal(data.symbol, ltp, dayLow, prevLtp);
       return;
@@ -374,6 +400,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.lastLogTime = 0;
       state.lastResetDate = today;
     }
+
+    // Reset volume tracker for new day
+    volumeTracker.resetSessionVolume();
 
     logger.info('Daily data reset for all symbols');
     logger.audit('STRATEGY_DAILY_RESET', { strategy: this.name });
