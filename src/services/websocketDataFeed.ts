@@ -677,11 +677,12 @@ export class WebSocketDataFeed extends EventEmitter {
   }
 
   /**
-   * Attempt to reconnect
+   * Attempt to reconnect with exponential backoff
    */
   private attemptReconnect(): void {
+    // CRITICAL: Prevent infinite reconnection loops that crash Render
     if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      logger.warn('⚠️ Max reconnection attempts reached - resetting counter and continuing', {
+      logger.warn('⚠️ Max reconnection attempts reached - using extended backoff', {
         attempts: this.reconnectAttempts,
         max: this.config.maxReconnectAttempts
       });
@@ -697,8 +698,14 @@ export class WebSocketDataFeed extends EventEmitter {
         delaySeconds: backoffDelay / 1000
       });
 
+      // Clear any existing timer to prevent duplicates
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
       this.reconnectTimer = setTimeout(() => {
-        this.connect();
+        this.reconnectSafely();
       }, backoffDelay);
 
       this.emit('max_reconnects_reached');
@@ -707,14 +714,43 @@ export class WebSocketDataFeed extends EventEmitter {
 
     this.reconnectAttempts++;
 
-    logger.info('🔄 Attempting to reconnect...', {
+    // Calculate exponential backoff delay
+    const baseDelay = this.config.reconnectDelay;
+    const backoffMultiplier = Math.min(this.reconnectAttempts, 5); // Cap at 5x
+    const delay = baseDelay * backoffMultiplier;
+
+    logger.info('🔄 Attempting to reconnect with backoff...', {
       attempt: this.reconnectAttempts,
-      max: this.config.maxReconnectAttempts
+      max: this.config.maxReconnectAttempts,
+      delaySeconds: delay / 1000
     });
 
+    // Clear any existing timer to prevent duplicates
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     this.reconnectTimer = setTimeout(() => {
-      this.connect();
-    }, this.config.reconnectDelay);
+      this.reconnectSafely();
+    }, delay);
+  }
+
+  /**
+   * Safely reconnect with error handling to prevent crashes
+   */
+  private async reconnectSafely(): Promise<void> {
+    try {
+      logger.info('🔌 Executing reconnection attempt...');
+      await this.connect();
+    } catch (error: any) {
+      logger.error('❌ Reconnection failed with error', {
+        error: error.message,
+        stack: error.stack
+      });
+      // Error is logged but won't crash the process
+      // Next reconnect will be attempted by the timeout
+    }
   }
 
   /**

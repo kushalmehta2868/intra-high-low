@@ -11,15 +11,76 @@ import { logger } from '../utils/logger';
  * - Instant access to latest prices
  * - Includes OHLC + Volume data
  * - Automatic stale data detection
+ * - Automatic memory cleanup
  */
 export class MarketDataCache extends EventEmitter {
   private cache: Map<string, MarketData> = new Map();
   private readonly STALE_DATA_THRESHOLD_MS = 60000; // 1 minute - data older than this is stale
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Clean every 5 minutes
+  private readonly MAX_CACHE_SIZE = 1000; // Prevent memory overflow
+
+  constructor() {
+    super();
+    this.startAutomaticCleanup();
+  }
+
+  /**
+   * Start automatic cleanup of stale data to prevent memory leaks
+   */
+  private startAutomaticCleanup(): void {
+    this.cleanupInterval = setInterval(() => {
+      const removed = this.clearStaleData();
+      if (removed > 0) {
+        logger.debug('Automatic cache cleanup', {
+          removed,
+          remaining: this.cache.size
+        });
+      }
+
+      // Check cache size and warn if approaching limit
+      if (this.cache.size > this.MAX_CACHE_SIZE * 0.8) {
+        logger.warn('⚠️ Cache size approaching limit', {
+          size: this.cache.size,
+          limit: this.MAX_CACHE_SIZE,
+          percentUsed: ((this.cache.size / this.MAX_CACHE_SIZE) * 100).toFixed(1)
+        });
+      }
+    }, this.CLEANUP_INTERVAL_MS);
+
+    // Prevent cleanup interval from keeping process alive
+    this.cleanupInterval.unref();
+  }
+
+  /**
+   * Stop automatic cleanup (call on shutdown)
+   */
+  public stopCleanup(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+      logger.debug('Cache cleanup stopped');
+    }
+  }
 
   /**
    * Update cache with fresh market data from WebSocket
    */
   public update(data: MarketData): void {
+    // CRITICAL: Prevent unbounded cache growth
+    if (this.cache.size >= this.MAX_CACHE_SIZE && !this.cache.has(data.symbol)) {
+      logger.warn('⚠️ Cache full - removing oldest entry', {
+        size: this.cache.size,
+        limit: this.MAX_CACHE_SIZE
+      });
+
+      // Remove oldest entry
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) {
+        this.cache.delete(firstKey);
+      }
+    }
+
     const previousData = this.cache.get(data.symbol);
     this.cache.set(data.symbol, data);
 
