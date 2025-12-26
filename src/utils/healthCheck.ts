@@ -23,8 +23,10 @@ export class HealthCheckServer {
   };
   private startTime: number = Date.now();
 
-  constructor(port: number = 10000) {
-    this.port = port;
+  constructor(port?: number) {
+    // Use PORT from environment (Render sets this automatically)
+    // Otherwise use provided port or default to 10000
+    this.port = port || parseInt(process.env.PORT || '10000');
   }
 
   /**

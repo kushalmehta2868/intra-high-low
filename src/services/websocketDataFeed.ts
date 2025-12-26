@@ -666,7 +666,26 @@ export class WebSocketDataFeed extends EventEmitter {
    */
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      logger.error('Max reconnection attempts reached');
+      logger.warn('⚠️ Max reconnection attempts reached - resetting counter and continuing', {
+        attempts: this.reconnectAttempts,
+        max: this.config.maxReconnectAttempts
+      });
+
+      // CRITICAL FIX: Reset reconnect attempts and use exponential backoff
+      // Don't give up - keep trying with longer delays to prevent Render restarts
+      this.reconnectAttempts = 0;
+
+      // Use exponential backoff - wait longer before retrying
+      const backoffDelay = this.config.reconnectDelay * 6; // 30 seconds
+
+      logger.info('🔄 Will retry connection after extended delay', {
+        delaySeconds: backoffDelay / 1000
+      });
+
+      this.reconnectTimer = setTimeout(() => {
+        this.connect();
+      }, backoffDelay);
+
       this.emit('max_reconnects_reached');
       return;
     }

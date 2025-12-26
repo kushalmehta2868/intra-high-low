@@ -191,7 +191,8 @@ async function main() {
     process.on('uncaughtException', async (error) => {
       logger.error('Uncaught Exception', error);
 
-      // Only shutdown for critical errors, not recoverable ones
+      // CRITICAL FIX: Don't call process.exit() to prevent Render restarts
+      // Log the error and attempt recovery instead
       const errorMessage = error.message || '';
       const isCritical = errorMessage.includes('EADDRINUSE') ||
                         errorMessage.includes('ENOSPC') ||
@@ -199,11 +200,38 @@ async function main() {
                         errorMessage.includes('Out of memory');
 
       if (isCritical && !isShuttingDown) {
-        logger.error('Critical error detected - initiating shutdown');
-        await shutdown('UNCAUGHT_EXCEPTION');
-        process.exit(1);
+        logger.error('🚨 Critical error detected - attempting graceful recovery', {
+          error: errorMessage,
+          willRestart: false
+        });
+
+        // Mark health check as unhealthy but don't exit
+        healthCheckServer.setUnhealthy();
+
+        // Try to recover by stopping and restarting the engine
+        try {
+          await engine.stop();
+          logger.info('Engine stopped after critical error');
+
+          // Wait a bit before attempting restart
+          setTimeout(async () => {
+            try {
+              logger.info('Attempting to restart engine after critical error...');
+              await engine.start();
+              healthCheckServer.setHealthy();
+              logger.info('✅ Engine restarted successfully');
+            } catch (restartError: any) {
+              logger.error('Failed to restart engine', restartError);
+              // Still don't exit - keep health check server alive
+            }
+          }, 5000);
+        } catch (stopError: any) {
+          logger.error('Failed to stop engine during recovery', stopError);
+        }
       } else {
-        logger.warn('Non-critical exception - continuing operation');
+        logger.warn('Non-critical exception - continuing operation', {
+          error: errorMessage
+        });
         // Continue running for recoverable errors
       }
     });
@@ -234,7 +262,17 @@ async function main() {
 
   } catch (error: any) {
     logger.error('Fatal error during startup', error);
-    process.exit(1);
+
+    // CRITICAL FIX: Don't exit on startup error - keep process alive for Render
+    // Start health check in unhealthy state and retry later
+    healthCheckServer.start();
+    healthCheckServer.setUnhealthy();
+
+    logger.error('🚨 Bot failed to start - health check server running in error state');
+    logger.info('Process will remain alive. Manual intervention may be required.');
+
+    // Keep process alive but do nothing
+    await new Promise(() => {}); // Never resolves
   }
 }
 

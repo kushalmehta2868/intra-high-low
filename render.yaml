@@ -1,12 +1,13 @@
 services:
-  # Background Worker - Trading Bot
-  - type: worker
+  # Web Service - Trading Bot (uses health check endpoint to prevent restarts)
+  - type: web
     name: angel-intraday-bot
     env: node
     region: singapore # or oregon, frankfurt based on your location
     plan: starter # Free tier (or upgrade to standard for better performance)
     buildCommand: npm install && npm run build
     startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
