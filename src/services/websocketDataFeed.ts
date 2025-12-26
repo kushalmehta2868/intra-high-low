@@ -767,9 +767,16 @@ export class WebSocketDataFeed extends EventEmitter {
     }
 
     if (this.ws) {
-      // Remove all event listeners to prevent memory leaks
+      // CRITICAL: Remove listeners BEFORE closing to prevent reconnection attempts
       this.ws.removeAllListeners();
-      this.ws.close();
+
+      try {
+        // Close with code 1000 (normal closure)
+        this.ws.close(1000, 'Manual disconnect');
+      } catch (error: any) {
+        logger.debug('Error closing WebSocket', { error: error.message });
+      }
+
       this.ws = null;
     }
 

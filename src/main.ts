@@ -250,6 +250,67 @@ async function main() {
       }
     });
 
+    // CRITICAL: Add periodic memory monitoring to detect leaks
+    const memoryMonitorInterval = setInterval(() => {
+      const usage = process.memoryUsage();
+      const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+      const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
+      const rssMB = Math.round(usage.rss / 1024 / 1024);
+
+      // Log every 5 minutes
+      logger.debug('Memory usage', {
+        heapUsed: `${heapUsedMB}MB`,
+        heapTotal: `${heapTotalMB}MB`,
+        rss: `${rssMB}MB`
+      });
+
+      // Warn if heap used exceeds 400MB (approaching 512MB limit)
+      if (heapUsedMB > 400) {
+        logger.warn('⚠️ High memory usage detected', {
+          heapUsed: `${heapUsedMB}MB`,
+          heapTotal: `${heapTotalMB}MB`,
+          threshold: '400MB',
+          action: 'Consider restarting if memory continues to grow'
+        });
+      }
+
+      // Critical if exceeds 450MB (danger zone)
+      if (heapUsedMB > 450) {
+        logger.error('🚨 CRITICAL MEMORY USAGE', {
+          heapUsed: `${heapUsedMB}MB`,
+          limit: '512MB',
+          action: 'Memory leak suspected - forcing garbage collection'
+        });
+
+        // Force garbage collection if available
+        if (global.gc) {
+          logger.info('Running garbage collection...');
+          global.gc();
+          const afterGC = process.memoryUsage();
+          const afterMB = Math.round(afterGC.heapUsed / 1024 / 1024);
+          logger.info('Garbage collection complete', {
+            before: `${heapUsedMB}MB`,
+            after: `${afterMB}MB`,
+            freed: `${heapUsedMB - afterMB}MB`
+          });
+        }
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Don't let interval keep process alive
+    memoryMonitorInterval.unref();
+
+    // CRITICAL: Add keep-alive ping to prevent Render from thinking process is dead
+    const keepAliveInterval = setInterval(() => {
+      logger.debug('Keep-alive ping', {
+        uptime: Math.floor(process.uptime()),
+        memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`
+      });
+    }, 60 * 1000); // Every 1 minute
+
+    // Don't let interval keep process alive
+    keepAliveInterval.unref();
+
     await engine.start();
 
     // Update health check - engine is running
