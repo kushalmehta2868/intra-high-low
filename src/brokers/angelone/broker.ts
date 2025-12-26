@@ -46,29 +46,74 @@ export class AngelOneBroker extends BaseBroker {
 
         // Initialize WebSocket data feed for REAL mode
         if (this.watchlist.length > 0) {
-          this.wsDataFeed = new WebSocketDataFeed(this.client);
+          try {
+            this.wsDataFeed = new WebSocketDataFeed(this.client);
 
-          // Forward market data events from WebSocket to broker listeners AND cache
-          this.wsDataFeed.on('market_data', (data: MarketData) => {
-            // Update cache for instant access (eliminates API calls)
-            marketDataCache.update(data);
+            // Forward market data events from WebSocket to broker listeners AND cache
+            this.wsDataFeed.on('market_data', (data: MarketData) => {
+              try {
+                // Update cache for instant access (eliminates API calls)
+                marketDataCache.update(data);
 
-            // Forward to strategies
-            this.emitMarketData(data);
-          });
-
-          // Connect to WebSocket
-          const wsConnected = await this.wsDataFeed.connect();
-          if (wsConnected) {
-            logger.info('✅ WebSocket connected for REAL mode');
-
-            // Subscribe to all watchlist symbols
-            await this.wsDataFeed.subscribeMultiple(this.watchlist, 'SNAP_QUOTE');
-            logger.info('✅ Subscribed to symbols via WebSocket', {
-              count: this.watchlist.length
+                // Forward to strategies
+                this.emitMarketData(data);
+              } catch (dataError: any) {
+                logger.error('Error processing market data', {
+                  error: dataError.message,
+                  symbol: data?.symbol
+                });
+              }
             });
-          } else {
-            logger.warn('WebSocket connection failed - market data unavailable');
+
+            // CRITICAL: Add error handler to prevent crashes
+            this.wsDataFeed.on('error', (error: Error) => {
+              logger.error('WebSocket error event', {
+                error: error.message,
+                willRetry: true
+              });
+              // Error is logged, WebSocket will auto-reconnect
+            });
+
+            // Connect to WebSocket with timeout
+            logger.info('🔌 Connecting to WebSocket (30s timeout)...');
+            const wsConnected = await Promise.race([
+              this.wsDataFeed.connect(),
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => {
+                  logger.warn('⚠️ WebSocket connection timeout - will retry in background');
+                  resolve(false);
+                }, 30000); // 30 second timeout
+              })
+            ]);
+
+            if (wsConnected) {
+              logger.info('✅ WebSocket connected for REAL mode');
+
+              try {
+                // Subscribe to all watchlist symbols
+                await this.wsDataFeed.subscribeMultiple(this.watchlist, 'SNAP_QUOTE');
+                logger.info('✅ Subscribed to symbols via WebSocket', {
+                  count: this.watchlist.length
+                });
+              } catch (subError: any) {
+                logger.error('Failed to subscribe to symbols', {
+                  error: subError.message,
+                  willRetry: 'Subscription will retry on reconnect'
+                });
+              }
+            } else {
+              logger.warn('⚠️ WebSocket connection failed - market data will be limited');
+              logger.info('WebSocket will retry connection in background');
+              // Don't throw - continue with API fallback
+            }
+          } catch (wsError: any) {
+            logger.error('❌ WebSocket initialization failed', {
+              error: wsError.message,
+              stack: wsError.stack,
+              impact: 'Market data will use API fallback (slower, rate limited)'
+            });
+            // Don't throw - continue without WebSocket
+            this.wsDataFeed = null;
           }
         } else {
           logger.warn('⚠️ No watchlist provided - market data streaming disabled in REAL mode');

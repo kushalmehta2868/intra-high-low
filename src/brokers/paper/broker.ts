@@ -83,36 +83,80 @@ export class PaperBroker extends BaseBroker {
           logger.info('✅ Symbol token cache refreshed');
 
           // Initialize WebSocket data feed for real-time market data with market hours
-          this.wsDataFeed = new WebSocketDataFeed(
-            this.angelClient,
-            this.marketStartTime,
-            this.marketEndTime
-          );
+          try {
+            this.wsDataFeed = new WebSocketDataFeed(
+              this.angelClient,
+              this.marketStartTime,
+              this.marketEndTime
+            );
 
-          // Forward market data events AND update cache
-          this.wsDataFeed.on('market_data', (data: MarketData) => {
-            // Update cache for instant access (eliminates API calls)
-            marketDataCache.update(data);
+            // Forward market data events AND update cache
+            this.wsDataFeed.on('market_data', (data: MarketData) => {
+              try {
+                // Update cache for instant access (eliminates API calls)
+                marketDataCache.update(data);
 
-            // Emit market data for strategies to consume
-            this.emit('market_data', data);
-          });
+                // Emit market data for strategies to consume
+                this.emit('market_data', data);
+              } catch (dataError: any) {
+                logger.error('Error processing market data', {
+                  error: dataError.message,
+                  symbol: data?.symbol
+                });
+              }
+            });
 
-          // Connect to WebSocket
-          const wsConnected = await this.wsDataFeed.connect();
-          if (wsConnected) {
-            logger.info('✅ WebSocket market data connected');
-
-            // Subscribe to all symbols in watchlist
-            const watchlist = (this as any).watchlist;
-            if (watchlist && watchlist.length > 0) {
-              await this.wsDataFeed.subscribeMultiple(watchlist, 'SNAP_QUOTE');
-              logger.info('✅ Subscribed to symbols via WebSocket', {
-                count: watchlist.length
+            // CRITICAL: Add error handler to prevent crashes
+            this.wsDataFeed.on('error', (error: Error) => {
+              logger.error('WebSocket error event', {
+                error: error.message,
+                willRetry: true
               });
+              // Error is logged, WebSocket will auto-reconnect
+            });
+
+            // Connect to WebSocket with timeout
+            logger.info('🔌 Connecting to WebSocket (30s timeout)...');
+            const wsConnected = await Promise.race([
+              this.wsDataFeed.connect(),
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => {
+                  logger.warn('⚠️ WebSocket connection timeout - will retry in background');
+                  resolve(false);
+                }, 30000);
+              })
+            ]);
+
+            if (wsConnected) {
+              logger.info('✅ WebSocket market data connected');
+
+              try {
+                // Subscribe to all symbols in watchlist
+                const watchlist = (this as any).watchlist;
+                if (watchlist && watchlist.length > 0) {
+                  await this.wsDataFeed.subscribeMultiple(watchlist, 'SNAP_QUOTE');
+                  logger.info('✅ Subscribed to symbols via WebSocket', {
+                    count: watchlist.length
+                  });
+                }
+              } catch (subError: any) {
+                logger.error('Failed to subscribe to symbols', {
+                  error: subError.message,
+                  willRetry: 'Subscription will retry on reconnect'
+                });
+              }
+            } else {
+              logger.warn('⚠️ WebSocket connection failed - will use API fallback');
+              // Don't throw - continue without WebSocket
             }
-          } else {
-            logger.warn('WebSocket connection failed - market data unavailable');
+          } catch (wsError: any) {
+            logger.error('❌ WebSocket initialization failed', {
+              error: wsError.message,
+              stack: wsError.stack,
+              impact: 'Market data will use API fallback'
+            });
+            // Don't throw - continue without WebSocket
+            this.wsDataFeed = null;
           }
         }
       }
