@@ -59,6 +59,39 @@ async function main() {
       logger.info(`📅 Next trading day: ${nextTradingDayStr}`);
       logger.info('='.repeat(50));
 
+      // CRITICAL: Check every hour if it's now a trading day
+      // This allows bot to automatically start on next trading day
+      const tradingDayCheckInterval = setInterval(() => {
+        const now = new Date();
+        const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+
+        if (holidayCalendar.isTradingDay(now)) {
+          logger.info('✅ TRADING DAY DETECTED - Restarting bot...');
+          logger.info(`Date: ${istNow.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+
+          // Clear interval
+          clearInterval(tradingDayCheckInterval);
+
+          // Restart the process to initialize properly
+          logger.info('🔄 Process will restart in 5 seconds...');
+          setTimeout(() => {
+            process.exit(0); // Exit cleanly, Render will restart it
+          }, 5000);
+        } else {
+          // Log daily that we're still sleeping
+          const currentHour = istNow.getHours();
+          if (currentHour === 9) { // Log once at 9 AM IST
+            logger.info(`💤 Still sleeping (non-trading day) - Next check in 1 hour`);
+          }
+        }
+      }, 60 * 60 * 1000); // Check every 1 hour
+
+      // Don't let interval prevent shutdown
+      tradingDayCheckInterval.unref();
+
+      logger.info('🔍 Trading day check running every 1 hour');
+      logger.info('Bot will automatically restart when next trading day arrives');
+
       // Keep process alive but do nothing (for Render.com)
       // Just wait indefinitely - no trading operations
       await new Promise(() => {}); // Never resolves, keeps process alive
