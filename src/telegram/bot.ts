@@ -273,9 +273,6 @@ ${message}
     const message = `
 *⚠️ Risk Statistics*
 
-Trades Today: ${stats.tradesExecutedToday}/${stats.maxTradesPerDay}
-Trades Remaining: ${stats.tradesRemaining}
-
 Daily P&L: ₹${stats.dailyPnL.toFixed(2)}
 Daily Loss: ${stats.dailyLossPercentage.toFixed(2)}%
 Max Loss Allowed: ${stats.maxDailyLossPercent}%

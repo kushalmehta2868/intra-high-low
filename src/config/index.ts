@@ -34,7 +34,6 @@ class ConfigManager {
       killSwitch: process.env.KILL_SWITCH === 'true',
       riskLimits: {
         maxRiskPerTradePercent: parseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT || '2'),
-        maxTradesPerDay: parseInt(process.env.MAX_TRADES_PER_DAY || '5'),
         maxDailyLossPercent: parseFloat(process.env.MAX_DAILY_LOSS_PERCENT || '5'),
         positionSizePercent: parseFloat(process.env.POSITION_SIZE_PERCENT || '10'),
         marginMultiplier: parseFloat(process.env.MARGIN_MULTIPLIER || '5'),
@@ -78,17 +77,13 @@ class ConfigManager {
     }
 
     if (this.config.trading.riskLimits.maxRiskPerTradePercent <= 0 ||
-        this.config.trading.riskLimits.maxRiskPerTradePercent > 100) {
+      this.config.trading.riskLimits.maxRiskPerTradePercent > 100) {
       errors.push('MAX_RISK_PER_TRADE_PERCENT must be between 0 and 100');
     }
 
     if (this.config.trading.riskLimits.maxDailyLossPercent <= 0 ||
-        this.config.trading.riskLimits.maxDailyLossPercent > 100) {
+      this.config.trading.riskLimits.maxDailyLossPercent > 100) {
       errors.push('MAX_DAILY_LOSS_PERCENT must be between 0 and 100');
-    }
-
-    if (this.config.trading.riskLimits.maxTradesPerDay <= 0) {
-      errors.push('MAX_TRADES_PER_DAY must be greater than 0');
     }
 
     if (!this.isValidTime(this.config.trading.autoSquareOffTime)) {

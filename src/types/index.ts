@@ -101,7 +101,6 @@ export interface MarketData {
 
 export interface RiskLimits {
   maxRiskPerTradePercent: number;
-  maxTradesPerDay: number;
   maxDailyLossPercent: number;
   positionSizePercent: number;
   marginMultiplier: number; // Intraday margin leverage (e.g., 5 for MIS, 1 for CNC)

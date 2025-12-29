@@ -62,7 +62,6 @@ export class DashboardDisplay {
     dashboard += `║   Consecutive Wins:     ${live.consecutiveWins.toString().padStart(2)} ${this.getStreakIndicator(live.consecutiveWins, 'win')}                                  ║\n`;
     dashboard += `║   Max Drawdown Today:   ${this.formatPercent(today.maxDrawdown, 5)}                              ║\n`;
     dashboard += `║   Daily Loss Limit:     ${this.formatPercent(riskStats.maxDailyLossPercent, 5)} (Used: ${this.formatPercent(riskStats.dailyLossPercentage, 4)})          ║\n`;
-    dashboard += `║   Trades Remaining:     ${riskStats.tradesRemaining.toString().padStart(2)}/${riskStats.maxTradesPerDay.toString().padStart(2)}                                       ║\n`;
     dashboard += '╟───────────────────────────────────────────────────────────────╢\n';
 
     // Open Positions
@@ -129,7 +128,6 @@ export class DashboardDisplay {
       msg += `No active streak\n`;
     }
 
-    msg += `Trades Left: ${riskStats.tradesRemaining}/${riskStats.maxTradesPerDay}\n`;
     msg += `Daily Loss Used: ${riskStats.dailyLossPercentage.toFixed(2)}% / ${riskStats.maxDailyLossPercent}%\n\n`;
 
     // Positions

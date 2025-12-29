@@ -60,12 +60,6 @@ export class RiskManager extends EventEmitter {
   ): RiskCheckResult {
     this.resetDailyCounters();
 
-    if (this.tradesExecutedToday >= this.riskLimits.maxTradesPerDay) {
-      const reason = `Max trades per day limit reached (${this.riskLimits.maxTradesPerDay})`;
-      logger.warn('Risk check failed', { reason });
-      return { allowed: false, reason };
-    }
-
     const dailyLossLimit = (this.riskLimits.maxDailyLossPercent / 100) * this.startingBalance;
     if (this.dailyPnL < 0 && Math.abs(this.dailyPnL) >= dailyLossLimit) {
       const reason = `Max daily loss limit reached (${this.riskLimits.maxDailyLossPercent}%)`;
@@ -205,17 +199,6 @@ export class RiskManager extends EventEmitter {
         });
       }
     }
-
-    if (this.tradesExecutedToday >= this.riskLimits.maxTradesPerDay * 0.8) {
-      logger.warn('Approaching max trades per day', {
-        tradesExecutedToday: this.tradesExecutedToday,
-        limit: this.riskLimits.maxTradesPerDay
-      });
-      this.emit('approaching_max_trades', {
-        tradesExecutedToday: this.tradesExecutedToday,
-        limit: this.riskLimits.maxTradesPerDay
-      });
-    }
   }
 
   public getRiskStats() {
@@ -228,8 +211,6 @@ export class RiskManager extends EventEmitter {
 
     return {
       tradesExecutedToday: this.tradesExecutedToday,
-      maxTradesPerDay: this.riskLimits.maxTradesPerDay,
-      tradesRemaining: Math.max(0, this.riskLimits.maxTradesPerDay - this.tradesExecutedToday),
       dailyPnL: this.dailyPnL,
       dailyLossLimit: dailyLossLimit,
       dailyLossPercentage: lossPercentage,
