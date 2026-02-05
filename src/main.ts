@@ -94,7 +94,7 @@ async function main() {
 
       // Keep process alive but do nothing (for Render.com)
       // Just wait indefinitely - no trading operations
-      await new Promise(() => {}); // Never resolves, keeps process alive
+      await new Promise(() => { }); // Never resolves, keeps process alive
       return;
     }
 
@@ -228,9 +228,9 @@ async function main() {
       // Log the error and attempt recovery instead
       const errorMessage = error.message || '';
       const isCritical = errorMessage.includes('EADDRINUSE') ||
-                        errorMessage.includes('ENOSPC') ||
-                        errorMessage.includes('EMFILE') ||
-                        errorMessage.includes('Out of memory');
+        errorMessage.includes('ENOSPC') ||
+        errorMessage.includes('EMFILE') ||
+        errorMessage.includes('Out of memory');
 
       if (isCritical && !isShuttingDown) {
         logger.error('🚨 Critical error detected - attempting graceful recovery', {
@@ -346,6 +346,41 @@ async function main() {
 
     await engine.start();
 
+    // ✅ CRITICAL: Check if restarting late in day with open positions
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const currentHour = istTime.getHours();
+
+    if (currentHour >= 15) {
+      logger.warn('🚨 Bot starting after 3:00 PM - checking for open positions');
+
+      const positions = engine.getOpenPositions();
+
+      if (positions.length > 0) {
+        logger.error('🚨 OPEN POSITIONS DETECTED AFTER 3:00 PM', {
+          count: positions.length,
+          symbols: positions.map(p => p.symbol)
+        });
+
+        // Use telegram bot from engine (indirectly via public method or we can expose it)
+        // Since we can't access telegramBot directly, we'll use engine to close positions
+        // Engine's closeAllPositions sends alerts internally
+
+        logger.info('Initiating emergency square-off due to late restart...');
+        await engine.closeAllPositions('Emergency square-off on late restart');
+        await engine.verifyAllPositionsClosed();
+
+        // Don't restart strategies
+        logger.info('Emergency square-off complete. Not restarting strategies to prevent new trades.');
+        // We let the process run to monitor, but strategies are effectively stopped if we closed everything
+        // Actually closeAllPositions doesn't stop strategies, so we should explicitly stop them
+        await engine.stop();
+
+        // But we want to keep health check alive
+        logger.info('Engine stopped after emergency cleanup. Bot is effectively idle.');
+      }
+    }
+
     // Update health check - engine is running
     healthCheckServer.setEngineRunning(true);
 
@@ -366,7 +401,7 @@ async function main() {
     logger.info('Process will remain alive. Manual intervention may be required.');
 
     // Keep process alive but do nothing
-    await new Promise(() => {}); // Never resolves
+    await new Promise(() => { }); // Never resolves
   }
 }
 

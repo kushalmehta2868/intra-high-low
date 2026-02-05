@@ -14,15 +14,71 @@ interface OrderAttempt {
  * Order Idempotency Manager
  * Prevents duplicate orders from being placed due to retries or race conditions
  */
+import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * Order Idempotency Manager
+ * Prevents duplicate orders from being placed due to retries or race conditions
+ * Persists state to disk to survive restarts
+ */
 export class OrderIdempotencyManager extends EventEmitter {
   private orderAttempts: Map<string, OrderAttempt> = new Map();
   private readonly CLEANUP_INTERVAL_MS = 60000; // Cleanup every minute
   private readonly MAX_AGE_MS = 120000; // 2 minutes max age
   private cleanupTimer: NodeJS.Timeout | null = null;
 
+  private readonly STORAGE_DIR = path.join(process.cwd(), 'data');
+  private readonly STORAGE_FILE = path.join(process.cwd(), 'data', 'idempotency_state.json');
+
   constructor() {
     super();
+    this.ensureStorageDir();
+    this.loadState();
     this.startCleanupTimer();
+  }
+
+  private ensureStorageDir(): void {
+    if (!fs.existsSync(this.STORAGE_DIR)) {
+      try {
+        fs.mkdirSync(this.STORAGE_DIR, { recursive: true });
+      } catch (error) {
+        logger.error('Failed to create data directory', error);
+      }
+    }
+  }
+
+  private loadState(): void {
+    try {
+      if (fs.existsSync(this.STORAGE_FILE)) {
+        const data = fs.readFileSync(this.STORAGE_FILE, 'utf-8');
+        const parsed = JSON.parse(data);
+
+        if (Array.isArray(parsed)) {
+          // Validate and load
+          const now = Date.now();
+          parsed.forEach((item: OrderAttempt) => {
+            // Only load items that aren't too old
+            if (now - item.timestamp < this.MAX_AGE_MS) {
+              this.orderAttempts.set(item.orderKey, item);
+            }
+          });
+
+          logger.info(`Loaded ${this.orderAttempts.size} idempotency records from disk`);
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to load idempotency state', error);
+    }
+  }
+
+  private saveState(): void {
+    try {
+      const data = JSON.stringify(Array.from(this.orderAttempts.values()));
+      fs.writeFileSync(this.STORAGE_FILE, data, 'utf-8');
+    } catch (error) {
+      logger.error('Failed to save idempotency state', error);
+    }
   }
 
   /**
@@ -114,6 +170,7 @@ export class OrderIdempotencyManager extends EventEmitter {
     };
 
     this.orderAttempts.set(orderKey, attempt);
+    this.saveState(); // Persist
 
     logger.debug('Order attempt registered', {
       orderKey,
@@ -131,6 +188,7 @@ export class OrderIdempotencyManager extends EventEmitter {
     if (attempt) {
       attempt.status = 'COMPLETED';
       attempt.orderId = orderId;
+      this.saveState(); // Persist
 
       logger.debug('Order marked as completed', {
         orderKey,
@@ -147,6 +205,7 @@ export class OrderIdempotencyManager extends EventEmitter {
 
     if (attempt) {
       attempt.status = 'FAILED';
+      this.saveState(); // Persist
 
       logger.debug('Order marked as failed', {
         orderKey,
@@ -180,6 +239,7 @@ export class OrderIdempotencyManager extends EventEmitter {
     }
 
     if (cleaned > 0) {
+      this.saveState(); // Persist if changes
       logger.debug('Order idempotency cleanup completed', {
         cleanedCount: cleaned,
         remainingCount: this.orderAttempts.size
@@ -206,6 +266,9 @@ export class OrderIdempotencyManager extends EventEmitter {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
+
+    // Final save
+    this.saveState();
 
     this.orderAttempts.clear();
     logger.info('Order idempotency manager stopped');

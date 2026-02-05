@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { RiskLimits, Position, Order, OrderSide } from '../types';
 import { logger } from '../utils/logger';
+import { chargesCalculator } from '../services/chargesCalculator';
 
 export interface RiskCheckResult {
   allowed: boolean;
@@ -13,7 +14,9 @@ export interface TradeRecord {
   quantity: number;
   entryPrice: number;
   exitPrice: number;
-  pnl: number;
+  grossPnL: number;
+  netPnL: number;
+  charges: number;
   pnlPercent: number;
   entryTime: Date;
   exitTime: Date;
@@ -23,7 +26,7 @@ export interface TradeRecord {
 export class RiskManager extends EventEmitter {
   private riskLimits: RiskLimits;
   private tradesExecutedToday: number = 0;
-  private dailyPnL: number = 0;
+  private dailyPnL: number = 0; // This is now Net PnL
   private startingBalance: number = 0;
   private currentBalance: number = 0;
   private lastResetDate: string = '';
@@ -56,9 +59,19 @@ export class RiskManager extends EventEmitter {
     side: OrderSide,
     quantity: number,
     price: number,
-    stopLoss?: number
+    stopLoss?: number,
+    currentOpenPositions: number = 0 // New parameter for max positions check
   ): RiskCheckResult {
     this.resetDailyCounters();
+
+    // 1. Check Max Open Positions (New Block)
+    // Hard limit of 5 concurrent positions for risk diversification
+    const MAX_OPEN_POSITIONS = 5;
+    if (currentOpenPositions >= MAX_OPEN_POSITIONS) {
+      const reason = `Max open positions limit reached (${MAX_OPEN_POSITIONS})`;
+      logger.warn('Risk check failed', { reason, currentOpenPositions });
+      return { allowed: false, reason };
+    }
 
     const dailyLossLimit = (this.riskLimits.maxDailyLossPercent / 100) * this.startingBalance;
     if (this.dailyPnL < 0 && Math.abs(this.dailyPnL) >= dailyLossLimit) {
@@ -135,10 +148,28 @@ export class RiskManager extends EventEmitter {
     return finalQuantity;
   }
 
-  public recordTrade(pnl: number, tradeDetails?: Partial<TradeRecord>): void {
+  public recordTrade(grossPnL: number, tradeDetails?: Partial<TradeRecord>): void {
     this.resetDailyCounters();
     this.tradesExecutedToday++;
-    this.dailyPnL += pnl;
+
+    // Calculate charges if details available
+    let charges = 0;
+    if (tradeDetails && tradeDetails.quantity && tradeDetails.entryPrice && tradeDetails.exitPrice) {
+      // Entry charges (Buy side usually)
+      const entryValue = tradeDetails.quantity * tradeDetails.entryPrice;
+      const entrySide = tradeDetails.side === 'BUY' ? OrderSide.BUY : OrderSide.SELL;
+      const entryCharges = chargesCalculator.calculateTotalCharges(entryValue, entrySide);
+
+      // Exit charges (Opposite side)
+      const exitValue = tradeDetails.quantity * tradeDetails.exitPrice;
+      const exitSide = tradeDetails.side === 'BUY' ? OrderSide.SELL : OrderSide.BUY;
+      const exitCharges = chargesCalculator.calculateTotalCharges(exitValue, exitSide);
+
+      charges = entryCharges.total + exitCharges.total;
+    }
+
+    const netPnL = grossPnL - charges;
+    this.dailyPnL += netPnL;
 
     // Record detailed trade information if provided
     if (tradeDetails) {
@@ -148,25 +179,34 @@ export class RiskManager extends EventEmitter {
         quantity: tradeDetails.quantity || 0,
         entryPrice: tradeDetails.entryPrice || 0,
         exitPrice: tradeDetails.exitPrice || 0,
-        pnl: pnl,
+        grossPnL: grossPnL,
+        netPnL: netPnL,
+        charges: charges,
         pnlPercent: tradeDetails.pnlPercent || 0,
         entryTime: tradeDetails.entryTime || new Date(),
         exitTime: tradeDetails.exitTime || new Date(),
-        result: pnl > 0.01 ? 'WIN' : pnl < -0.01 ? 'LOSS' : 'BREAKEVEN'
+        result: netPnL > 0 ? 'WIN' : 'LOSS' // Strict, slightly positive is win, even 0 is break-even but simplified
       };
+
+      if (Math.abs(netPnL) < 1) trade.result = 'BREAKEVEN'; // Tolerance
+
       this.dailyTrades.push(trade);
     }
+
 
     logger.info('Trade recorded', {
       tradesExecutedToday: this.tradesExecutedToday,
       dailyPnL: this.dailyPnL,
-      tradePnL: pnl
+      tradePnL: netPnL,
+      grossPnL: grossPnL,
+      charges: charges
     });
 
     logger.audit('TRADE_RECORDED', {
       tradesExecutedToday: this.tradesExecutedToday,
       dailyPnL: this.dailyPnL,
-      pnl
+      netPnL,
+      grossPnL
     });
 
     this.checkRiskThresholds();

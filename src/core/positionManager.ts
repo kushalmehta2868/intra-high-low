@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { Position, Order, Trade, OrderSide, PositionType } from '../types';
 import { IBroker } from '../brokers/base';
 import { logger } from '../utils/logger';
+import { chargesCalculator } from '../services/chargesCalculator';
 
 export class PositionManager extends EventEmitter {
   private positions: Map<string, Position> = new Map();
@@ -57,18 +58,35 @@ export class PositionManager extends EventEmitter {
 
   private updatePositionFromTrade(position: Position, trade: Trade): void {
     const isClosingTrade = (position.type === PositionType.LONG && trade.side === OrderSide.SELL) ||
-                           (position.type === PositionType.SHORT && trade.side === OrderSide.BUY);
+      (position.type === PositionType.SHORT && trade.side === OrderSide.BUY);
 
     if (isClosingTrade) {
       const closedQuantity = Math.min(position.quantity, trade.quantity);
-      const pnl = position.type === PositionType.LONG
+      const grossPnL = position.type === PositionType.LONG
         ? (trade.price - position.entryPrice) * closedQuantity
         : (position.entryPrice - trade.price) * closedQuantity;
 
-      const pnlPercent = (pnl / (position.entryPrice * closedQuantity)) * 100;
+      // Calculate charges
+      const entrySide = position.type === PositionType.LONG ? OrderSide.BUY : OrderSide.SELL;
+      const exitSide = trade.side;
+
+      const entryCharges = chargesCalculator.calculateTotalCharges(
+        position.entryPrice * closedQuantity,
+        entrySide
+      );
+
+      const exitCharges = chargesCalculator.calculateTotalCharges(
+        trade.price * closedQuantity,
+        exitSide
+      );
+
+      const totalCharges = entryCharges.total + exitCharges.total;
+      const netPnL = grossPnL - totalCharges;
+
+      const pnlPercent = (netPnL / (position.entryPrice * closedQuantity)) * 100;
 
       position.quantity -= closedQuantity;
-      position.pnl = pnl;
+      position.pnl = netPnL; // Store NET PnL
       position.pnlPercent = pnlPercent;
       position.currentPrice = trade.price; // CRITICAL: Set exit price
 
@@ -78,7 +96,7 @@ export class PositionManager extends EventEmitter {
         // Emit with complete position data including exit price
         this.emit('position_closed', {
           ...position,
-          pnl,
+          pnl: netPnL,
           pnlPercent,
           currentPrice: trade.price, // Ensure currentPrice is set
           exitPrice: trade.price,     // Also add exitPrice for clarity
@@ -90,7 +108,9 @@ export class PositionManager extends EventEmitter {
           entryPrice: position.entryPrice,
           exitPrice: trade.price,
           quantity: closedQuantity,
-          pnl,
+          grossPnL,
+          netPnL,
+          charges: totalCharges,
           pnlPercent
         });
 
@@ -99,7 +119,9 @@ export class PositionManager extends EventEmitter {
           entryPrice: position.entryPrice,
           exitPrice: trade.price,
           quantity: closedQuantity,
-          pnl,
+          grossPnL,
+          netPnL,
+          charges: totalCharges,
           pnlPercent
         });
       } else {
@@ -108,13 +130,14 @@ export class PositionManager extends EventEmitter {
         logger.info('Position reduced', {
           symbol: trade.symbol,
           remainingQuantity: position.quantity,
-          partialPnL: pnl
+          partialPnL: netPnL,
+          charges: totalCharges
         });
       }
     } else {
       const totalQuantity = position.quantity + trade.quantity;
       const avgPrice = ((position.entryPrice * position.quantity) +
-                       (trade.price * trade.quantity)) / totalQuantity;
+        (trade.price * trade.quantity)) / totalQuantity;
 
       position.quantity = totalQuantity;
       position.entryPrice = avgPrice;

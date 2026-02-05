@@ -43,12 +43,29 @@ class ConfigManager {
   }
 
   private loadBrokerConfig(): BrokerConfig {
-    return {
-      apiKey: process.env.ANGEL_API_KEY || '',
-      clientId: process.env.ANGEL_CLIENT_ID || '',
-      password: process.env.ANGEL_PASSWORD || '',
-      totpSecret: process.env.ANGEL_TOTP_SECRET || ''
-    };
+    const mode = process.env.TRADING_MODE?.toUpperCase() as TradingMode;
+    const isReal = mode === TradingMode.REAL;
+
+    // Strict Key Separation:
+    // REAL mode requires _REAL suffix
+    // PAPER mode requires _PAPER suffix
+    // This prevents accidental usage of wrong keys when switching modes
+
+    if (isReal) {
+      return {
+        apiKey: process.env.ANGEL_API_KEY_REAL || '',
+        clientId: process.env.ANGEL_CLIENT_ID_REAL || '',
+        password: process.env.ANGEL_PASSWORD_REAL || '',
+        totpSecret: process.env.ANGEL_TOTP_SECRET_REAL || ''
+      };
+    } else {
+      return {
+        apiKey: process.env.ANGEL_API_KEY_PAPER || '',
+        clientId: process.env.ANGEL_CLIENT_ID_PAPER || '',
+        password: process.env.ANGEL_PASSWORD_PAPER || '',
+        totpSecret: process.env.ANGEL_TOTP_SECRET_PAPER || ''
+      };
+    }
   }
 
   private loadTelegramConfig(): TelegramConfig {
@@ -61,11 +78,25 @@ class ConfigManager {
   private validateConfig(): void {
     const errors: string[] = [];
 
+    // 1. Environment Lock (CRITICAL SAFETY)
     if (this.config.trading.mode === TradingMode.REAL) {
-      if (!this.config.broker.apiKey) errors.push('ANGEL_API_KEY is required for REAL mode');
-      if (!this.config.broker.clientId) errors.push('ANGEL_CLIENT_ID is required for REAL mode');
-      if (!this.config.broker.password) errors.push('ANGEL_PASSWORD is required for REAL mode');
-      if (!this.config.broker.totpSecret) errors.push('ANGEL_TOTP_SECRET is required for REAL mode');
+      if (process.env.FORCE_REAL_MODE !== 'YES_I_AM_SURE') {
+        errors.push('CRITICAL: REAL TRADING MODE BLOCKED.');
+        errors.push('You must set FORCE_REAL_MODE=YES_I_AM_SURE in .env to enable real trading.');
+        errors.push('This is a safety lock to prevent accidental capital loss.');
+      }
+
+      // Check Real Credentials
+      if (!this.config.broker.apiKey) errors.push('ANGEL_API_KEY_REAL is required for REAL mode');
+      if (!this.config.broker.clientId) errors.push('ANGEL_CLIENT_ID_REAL is required for REAL mode');
+      if (!this.config.broker.password) errors.push('ANGEL_PASSWORD_REAL is required for REAL mode');
+      if (!this.config.broker.totpSecret) errors.push('ANGEL_TOTP_SECRET_REAL is required for REAL mode');
+    } else {
+      // Check Paper Credentials
+      if (!this.config.broker.apiKey) errors.push('ANGEL_API_KEY_PAPER is required for PAPER mode');
+      if (!this.config.broker.clientId) errors.push('ANGEL_CLIENT_ID_PAPER is required for PAPER mode');
+      if (!this.config.broker.password) errors.push('ANGEL_PASSWORD_PAPER is required for PAPER mode');
+      if (!this.config.broker.totpSecret) errors.push('ANGEL_TOTP_SECRET_PAPER is required for PAPER mode');
     }
 
     if (!this.config.telegram.botToken) {

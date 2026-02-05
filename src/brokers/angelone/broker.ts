@@ -7,6 +7,9 @@ import { symbolTokenService } from '../../services/symbolTokenService';
 import { WebSocketDataFeed } from '../../services/websocketDataFeed';
 import { marketDataCache } from '../../services/marketDataCache';
 import { configManager } from '../../config';
+import { productTypeValidator } from '../../services/productTypeValidator';
+import { exchangeValidator } from '../../services/exchangeValidator';
+import { tickSizeRounder } from '../../services/tickSizeRounder';
 
 interface PositionMetadata {
   stopLoss?: number;
@@ -166,23 +169,36 @@ export class AngelOneBroker extends BaseBroker {
         return null;
       }
 
+      // Validate exchange for symbol
+      const correctExchange = exchangeValidator.getExchangeForSymbol(symbol);
+      if (!correctExchange) {
+        logger.error('Cannot determine exchange for symbol', { symbol });
+        return null;
+      }
+
       // For bracket orders, Angel One requires variety='ROBO' and absolute trigger prices
       // squareoff = target price (absolute)
       // stoploss = stop-loss trigger price (absolute)
       const useROBOOrder = (stopPrice || target) && type === OrderType.MARKET;
+
+      const productType = 'INTRADAY';
+      if (!productTypeValidator.validateOrderProductType(productType)) {
+        logger.error('Invalid product type validation failed');
+        return null;
+      }
 
       const orderRequest = {
         variety: useROBOOrder ? 'ROBO' : 'NORMAL',
         tradingsymbol: symbol,
         symboltoken: symbolToken,
         transactiontype: side,
-        exchange: 'NSE',
+        exchange: correctExchange, // ✅ Use validated exchange
         ordertype: this.mapOrderType(type),
-        producttype: 'INTRADAY' as const,
+        producttype: productType as 'INTRADAY',
         duration: 'DAY' as const,
-        price: price ? price.toFixed(2) : '0',
-        squareoff: target ? target.toFixed(2) : '0',
-        stoploss: stopPrice ? stopPrice.toFixed(2) : '0',
+        price: price ? tickSizeRounder.roundToTickSize(price).toFixed(2) : '0',
+        squareoff: target ? tickSizeRounder.roundToTickSize(target).toFixed(2) : '0',
+        stoploss: stopPrice ? tickSizeRounder.roundToTickSize(stopPrice).toFixed(2) : '0',
         quantity: quantity.toString()
       };
 
