@@ -260,9 +260,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    */
   private on_buy_signal(symbol: string, ltp: number, dayHigh: number, prevLtp: number): void {
     // Stop Loss: 0.5% below entry
-    // Target: 0.25% above entry (1:0.5 risk/reward ratio - conservative start)
+    // Target: 0.75% above entry (Improved RR Ratio)
     const stopLoss = ltp * (1 - 0.005); // 0.5% below
-    const target = ltp * (1 + 0.0025);   // 0.25% above
+    const target = ltp * (1 + 0.0075);   // 0.75% above (Improved from 0.25%)
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -273,8 +273,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       stopLoss,
       target,
       marginMultiplier,
+      useTrailingSL: true, // Enable trailing SL for this strategy
       reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)})`,
-      confidence: 0.7
+      confidence: 0.8 // Increased confidence due to filters
     };
 
     const riskPerShare = ltp - stopLoss;
@@ -305,9 +306,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    */
   private on_sell_signal(symbol: string, ltp: number, dayLow: number, prevLtp: number): void {
     // Stop Loss: 0.5% above entry
-    // Target: 0.25% below entry (1:0.5 risk/reward ratio - conservative start)
+    // Target: 0.75% below entry (Improved RR Ratio)
     const stopLoss = ltp * (1 + 0.005); // 0.5% above
-    const target = ltp * (1 - 0.0025);   // 0.25% below
+    const target = ltp * (1 - 0.0075);   // 0.75% below (Improved from 0.25%)
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -318,8 +319,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       stopLoss,
       target,
       marginMultiplier,
+      useTrailingSL: true, // Enable trailing SL for this strategy
       reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)})`,
-      confidence: 0.7
+      confidence: 0.8 // Increased confidence due to filters
     };
 
     const riskPerShare = stopLoss - ltp;

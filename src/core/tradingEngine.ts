@@ -7,7 +7,7 @@ import { PositionManager } from './positionManager';
 import { MarketScheduler } from './scheduler';
 import { IStrategy } from '../strategies/base';
 import { TradingTelegramBot } from '../telegram/bot';
-import { AppConfig, TradingMode, StrategySignal, OrderSide, OrderType, Position, Order } from '../types';
+import { AppConfig, TradingMode, StrategySignal, OrderSide, OrderType, Position, Order, MarketData } from '../types';
 import { logger } from '../utils/logger';
 import configManager from '../config';
 import { positionLockManager } from '../utils/positionLock';
@@ -39,6 +39,7 @@ export class TradingEngine extends EventEmitter {
   private isRunning: boolean = false;
   private initialBalance: number = 0;
   private watchlist: string[] = [];
+  private symbolsToTrail: Set<string> = new Set(); // Track symbols that requested trailing SL
 
   // Slippage configuration (IMPROVED - Dynamic calculation)
   private readonly SLIPPAGE_BUFFER_MIN = 0.001; // 0.1% minimum expected slippage
@@ -143,6 +144,9 @@ export class TradingEngine extends EventEmitter {
       for (const strategy of this.strategies.values()) {
         strategy.onMarketData(data);
       }
+
+      // NEW: Trailing Stop-Loss Engine
+      this.handleTrailingStopLoss(data);
     });
 
     this.positionManager.on('position_opened', (position: Position) => {
@@ -351,6 +355,83 @@ export class TradingEngine extends EventEmitter {
     logger.info('Strategy added', { name: strategy.getName() });
   }
 
+  /**
+   * Core Trailing Stop-Loss Logic
+   * 1. 0.3% profit -> Move SL to Break-Even (Entry Price)
+   * 2. Every 0.2% further profit -> Move SL up/down by 0.2%
+   */
+  private async handleTrailingStopLoss(data: MarketData): Promise<void> {
+    if (!this.symbolsToTrail.has(data.symbol)) return;
+
+    const position = this.positionManager.getPosition(data.symbol);
+    if (!position || position.quantity === 0) {
+      this.symbolsToTrail.delete(data.symbol);
+      return;
+    }
+
+    const ltp = data.ltp;
+    const entryPrice = position.entryPrice;
+    const currentSL = position.stopLoss;
+
+    if (!currentSL) return;
+
+    // Initialize initialStopLoss if not set
+    if (!position.initialStopLoss) {
+      position.initialStopLoss = currentSL;
+      position.useTrailingSL = true;
+    }
+
+    const profitPct = position.type === 'LONG'
+      ? (ltp - entryPrice) / entryPrice * 100
+      : (entryPrice - ltp) / entryPrice * 100;
+
+    // STEP 1: Move to Break-Even at 0.3% profit
+    if (!position.isTrailing && profitPct >= 0.3) {
+      const newSL = entryPrice;
+
+      logger.info(`🛡️ [Trailing SL] Break-even triggered for ${data.symbol}`, {
+        entry: entryPrice,
+        ltp: ltp,
+        newSL: newSL
+      });
+
+      const success = await this.stopLossManager.updateStopLoss(data.symbol, newSL);
+      if (success) {
+        position.stopLoss = newSL;
+        position.isTrailing = true;
+        this.telegramBot.sendAlert('🛡️ Stop-Loss Moved to Break-Even',
+          `Symbol: ${data.symbol}\nNew SL: ₹${newSL.toFixed(2)}\nProfit hit: ${profitPct.toFixed(2)}%`);
+      }
+      return;
+    }
+
+    // STEP 2: Trail by 0.2% steps
+    if (position.isTrailing && position.stopLoss !== undefined) {
+      const slDistFromEntry = position.type === 'LONG'
+        ? (position.stopLoss - entryPrice) / entryPrice * 100
+        : (entryPrice - position.stopLoss) / entryPrice * 100;
+
+      const targetSLDist = profitPct - 0.2;
+
+      if (targetSLDist > slDistFromEntry && (targetSLDist - slDistFromEntry) >= 0.2) {
+        const newSL = position.type === 'LONG'
+          ? entryPrice * (1 + targetSLDist / 100)
+          : entryPrice * (1 - targetSLDist / 100);
+
+        logger.info(`📈 [Trailing SL] Moving SL higher for ${data.symbol}`, {
+          oldSL: position.stopLoss,
+          newSL: newSL,
+          profit: `${profitPct.toFixed(2)}%`
+        });
+
+        const success = await this.stopLossManager.updateStopLoss(data.symbol, newSL);
+        if (success) {
+          position.stopLoss = newSL;
+        }
+      }
+    }
+  }
+
   private async handleStrategySignal(signal: StrategySignal): Promise<void> {
     if (configManager.isKillSwitchActive()) {
       logger.warn('Signal ignored - kill switch active', signal);
@@ -540,6 +621,12 @@ export class TradingEngine extends EventEmitter {
           await this.telegramBot.sendAlert('Risk Check Failed', riskCheck.reason || 'Unknown reason');
           orderIdempotencyManager.markOrderFailed(orderKey, riskCheck.reason || 'Risk check failed');
           return;
+        }
+
+        // Register for trailing if requested
+        if (signal.useTrailingSL) {
+          this.symbolsToTrail.add(signal.symbol);
+          logger.info(`📝 Symbol registered for Trailing SL: ${signal.symbol}`);
         }
 
         // IMPROVEMENT: Determine order type based on trading mode
