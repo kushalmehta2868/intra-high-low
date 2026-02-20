@@ -1,8 +1,13 @@
-import { BaseStrategy } from './base';
-import { StrategyContext, MarketData, StrategySignal, Position } from '../types';
-import { logger } from '../utils/logger';
-import { getSymbolMarginMultiplier } from '../config/symbolConfig';
-import { volumeTracker } from '../services/volumeTracker';
+import { BaseStrategy } from "./base";
+import {
+  StrategyContext,
+  MarketData,
+  StrategySignal,
+  Position,
+} from "../types";
+import { logger } from "../utils/logger";
+import { getSymbolMarginMultiplier } from "../config/symbolConfig";
+import { volumeTracker } from "../services/volumeTracker";
 
 interface SymbolState {
   // Current day OHLC
@@ -18,11 +23,11 @@ interface SymbolState {
   hasBrokenLowToday: boolean;
 
   // Cooldown after position close
-  positionClosedAt: number | null;  // Timestamp when position was closed
-  isInCooldown: boolean;            // Whether symbol is in cooldown period
+  positionClosedAt: number | null; // Timestamp when position was closed
+  isInCooldown: boolean; // Whether symbol is in cooldown period
 
-  lastLogTime: number;  // Track last log time for periodic logging
-  lastResetDate: string;  // Track when we last reset for new day
+  lastLogTime: number; // Track last log time for periodic logging
+  lastResetDate: string; // Track when we last reset for new day
 }
 
 export class DayHighLowBreakoutStrategy extends BaseStrategy {
@@ -32,7 +37,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private readonly COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes cooldown after position close
 
   constructor(context: StrategyContext, watchlist: string[] = []) {
-    super('DayHighLowBreakout', context);
+    super("DayHighLowBreakout", context);
     this.watchlist = watchlist;
   }
 
@@ -50,12 +55,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         positionClosedAt: null,
         isInCooldown: false,
         lastLogTime: 0,
-        lastResetDate: ''
+        lastResetDate: "",
       });
     }
 
-    logger.info('DayHighLowBreakout strategy initialized', {
-      watchlist: this.watchlist
+    logger.info("DayHighLowBreakout strategy initialized", {
+      watchlist: this.watchlist,
     });
   }
 
@@ -65,9 +70,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const state = this.symbolStates.get(data.symbol);
     if (!state) return;
 
-    // Update volume tracker with current tick volume
+    // Update 5-min candle tracker with current tick cumulative volume
     if (data.volume) {
-      volumeTracker.updateVolume(data.symbol, data.volume);
+      volumeTracker.recordTick(data.symbol, data.volume, data.timestamp);
     }
 
     // Check if it's a new trading day and reset accordingly
@@ -80,13 +85,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     if (state.open === 0) {
       state.open = data.open || data.ltp;
       state.dayHigh = data.high || data.ltp; // Initialize from real data, not 0
-      state.dayLow = data.low || data.ltp;   // Initialize from real data, not Infinity
+      state.dayLow = data.low || data.ltp; // Initialize from real data, not Infinity
       state.prevLtp = data.ltp;
       logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
         open: `₹${state.open.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
         dayLow: `₹${state.dayLow.toFixed(2)}`,
-        ltp: `₹${data.ltp.toFixed(2)}`
+        ltp: `₹${data.ltp.toFixed(2)}`,
       });
     }
 
@@ -112,7 +117,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    * Check if it's a new trading day and reset state accordingly
    */
   private checkAndResetForNewDay(state: SymbolState): void {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
 
     if (state.lastResetDate !== today) {
       // Reset for new trading day
@@ -145,9 +150,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         state.hasBrokenHighToday = false;
         state.hasBrokenLowToday = false;
 
-        logger.info(`⏰ [${symbol}] Cooldown period ended - ready for new signals`, {
-          cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} minutes`
-        });
+        logger.info(
+          `⏰ [${symbol}] Cooldown period ended - ready for new signals`,
+          {
+            cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} minutes`,
+          },
+        );
       }
     }
   }
@@ -156,39 +164,50 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const now = Date.now();
 
     // Log every 5 minutes OR on first data point
-    if (state.lastLogTime === 0 || (now - state.lastLogTime) >= this.LOG_INTERVAL_MS) {
+    if (
+      state.lastLogTime === 0 ||
+      now - state.lastLogTime >= this.LOG_INTERVAL_MS
+    ) {
       state.lastLogTime = now;
 
-      const distanceToHigh = state.dayHigh > 0 ? ((state.dayHigh - data.ltp) / data.ltp) * 100 : 0;
-      const distanceToLow = state.dayLow !== Infinity ? ((data.ltp - state.dayLow) / data.ltp) * 100 : 0;
+      const distanceToHigh =
+        state.dayHigh > 0 ? ((state.dayHigh - data.ltp) / data.ltp) * 100 : 0;
+      const distanceToLow =
+        state.dayLow !== Infinity
+          ? ((data.ltp - state.dayLow) / data.ltp) * 100
+          : 0;
 
       // Determine status
-      let status = '⏸️  Consolidating';
+      let status = "⏸️  Consolidating";
       if (distanceToHigh < 0.1 && !state.hasBrokenHighToday) {
-        status = '🔥 Near High Breakout!';
+        status = "🔥 Near High Breakout!";
       } else if (distanceToLow < 0.1 && !state.hasBrokenLowToday) {
-        status = '❄️  Near Low Breakout!';
+        status = "❄️  Near Low Breakout!";
       }
 
       // Get volume stats
       const volumeStats = volumeTracker.getVolumeStats(data.symbol);
       const volumeInfo = volumeStats
         ? `${volumeStats.currentVolume.toLocaleString()} (${volumeStats.volumeRatio.toFixed(2)}x avg)`
-        : data.volume > 0 ? data.volume.toLocaleString() : 'N/A';
+        : data.volume > 0
+          ? data.volume.toLocaleString()
+          : "N/A";
 
       logger.info(`📊 [${data.symbol}] Price Levels Check`, {
         symbol: data.symbol,
         status: status,
         currentPrice: `₹${data.ltp.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
-        dayLow: `₹${state.dayLow !== Infinity ? state.dayLow.toFixed(2) : 'N/A'}`,
+        dayLow: `₹${state.dayLow !== Infinity ? state.dayLow.toFixed(2) : "N/A"}`,
         open: `₹${state.open.toFixed(2)}`,
         volume: volumeInfo,
         distanceToHigh: `${distanceToHigh.toFixed(2)}%`,
         distanceToLow: `${distanceToLow.toFixed(2)}%`,
         hasBrokenHigh: state.hasBrokenHighToday,
         hasBrokenLow: state.hasBrokenLowToday,
-        timestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+        timestamp: new Date().toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
+        }),
       });
     }
   }
@@ -198,8 +217,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    * Buy: prevLtp <= dayHigh AND ltp > dayHigh (cross ABOVE current day high)
    * Sell: prevLtp >= dayLow AND ltp < dayLow (cross BELOW current day low)
    */
-  private checkForBreakout(data: MarketData, state: SymbolState, dayHigh: number,
-    dayLow: number): void {
+  private checkForBreakout(
+    data: MarketData,
+    state: SymbolState,
+    dayHigh: number,
+    dayLow: number,
+  ): void {
     // Skip if we already have a position
     const existingPosition = this.context.positions.get(data.symbol);
     if (existingPosition && existingPosition.quantity !== 0) {
@@ -212,7 +235,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     // Can't check cross without previous LTP or valid day high/low
-    if (state.prevLtp === 0 || state.dayHigh === 0 || state.dayLow === Infinity) {
+    if (
+      state.prevLtp === 0 ||
+      state.dayHigh === 0 ||
+      state.dayLow === Infinity
+    ) {
       return;
     }
 
@@ -223,13 +250,24 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
-      // CRITICAL: Check volume surge before generating signal
-      if (!volumeTracker.hasVolumeSurge(data.symbol)) {
-        logger.info(`🚫 BUY signal rejected - insufficient volume`, {
-          symbol: data.symbol,
-          volumeRatio: volumeTracker.getVolumeRatio(data.symbol).toFixed(2) + 'x',
-          required: '1.5x'
-        });
+      // CRITICAL: Check 5-min candle volume surge before generating signal
+      if (!volumeTracker.hasFiveMinVolumeSurge(data.symbol)) {
+        logger.info(
+          `🚫 BUY signal rejected - insufficient 5-min candle volume`,
+          {
+            symbol: data.symbol,
+            currentCandleVolume: volumeTracker
+              .getCurrentCandleVolume(data.symbol)
+              .toLocaleString(),
+            avgFiveMinVolume: volumeTracker
+              .getAvgFiveMinVolume(data.symbol)
+              .toFixed(0),
+            required: "2.0x",
+            completedCandles: volumeTracker.getCompletedCandleCount(
+              data.symbol,
+            ),
+          },
+        );
         return; // Reject signal without setting hasBrokenHighToday
       }
 
@@ -239,13 +277,24 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     if (crossedBelowLow && !state.hasBrokenLowToday) {
-      // CRITICAL: Check volume surge before generating signal
-      if (!volumeTracker.hasVolumeSurge(data.symbol)) {
-        logger.info(`🚫 SELL signal rejected - insufficient volume`, {
-          symbol: data.symbol,
-          volumeRatio: volumeTracker.getVolumeRatio(data.symbol).toFixed(2) + 'x',
-          required: '1.5x'
-        });
+      // CRITICAL: Check 5-min candle volume surge before generating signal
+      if (!volumeTracker.hasFiveMinVolumeSurge(data.symbol)) {
+        logger.info(
+          `🚫 SELL signal rejected - insufficient 5-min candle volume`,
+          {
+            symbol: data.symbol,
+            currentCandleVolume: volumeTracker
+              .getCurrentCandleVolume(data.symbol)
+              .toLocaleString(),
+            avgFiveMinVolume: volumeTracker
+              .getAvgFiveMinVolume(data.symbol)
+              .toFixed(0),
+            required: "2.0x",
+            completedCandles: volumeTracker.getCompletedCandleCount(
+              data.symbol,
+            ),
+          },
+        );
         return; // Reject signal without setting hasBrokenLowToday
       }
 
@@ -258,31 +307,36 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   /**
    * Handle BUY signal when price crosses ABOVE day high
    */
-  private on_buy_signal(symbol: string, ltp: number, dayHigh: number, prevLtp: number): void {
+  private on_buy_signal(
+    symbol: string,
+    ltp: number,
+    dayHigh: number,
+    prevLtp: number,
+  ): void {
     // Stop Loss: 0.5% below entry
     // Target: 0.75% above entry (Improved RR Ratio)
     const stopLoss = ltp * (1 - 0.005); // 0.5% below
-    const target = ltp * (1 + 0.0075);   // 0.75% above (Improved from 0.25%)
+    const target = ltp * (1 + 0.0075); // 0.75% above (Improved from 0.25%)
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
 
     const signal: StrategySignal = {
       symbol,
-      action: 'BUY',
+      action: "BUY",
       stopLoss,
       target,
       marginMultiplier,
       useTrailingSL: true, // Enable trailing SL for this strategy
       reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)})`,
-      confidence: 0.8 // Increased confidence due to filters
+      confidence: 0.8, // Increased confidence due to filters
     };
 
     const riskPerShare = ltp - stopLoss;
     const rewardPerShare = target - ltp;
     const riskRewardRatio = rewardPerShare / riskPerShare;
 
-    logger.info('🚀 BUY SIGNAL - Price crossed ABOVE day high', {
+    logger.info("🚀 BUY SIGNAL - Price crossed ABOVE day high", {
       symbol,
       prevLtp: `₹${prevLtp.toFixed(2)}`,
       dayHigh: `₹${dayHigh.toFixed(2)}`,
@@ -290,12 +344,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) <= dayHigh (${dayHigh.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) > dayHigh`,
       stopLoss: `₹${stopLoss.toFixed(2)} (0.5% below)`,
       target: `₹${target.toFixed(2)} (0.25% above)`,
-      riskReward: `1:${riskRewardRatio.toFixed(2)}`
+      riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
-    logger.audit('STRATEGY_SIGNAL', {
+    logger.audit("STRATEGY_SIGNAL", {
       strategy: this.name,
-      signal
+      signal,
     });
 
     this.emitSignal(signal);
@@ -304,31 +358,36 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   /**
    * Handle SELL signal when price crosses BELOW day low
    */
-  private on_sell_signal(symbol: string, ltp: number, dayLow: number, prevLtp: number): void {
+  private on_sell_signal(
+    symbol: string,
+    ltp: number,
+    dayLow: number,
+    prevLtp: number,
+  ): void {
     // Stop Loss: 0.5% above entry
     // Target: 0.75% below entry (Improved RR Ratio)
     const stopLoss = ltp * (1 + 0.005); // 0.5% above
-    const target = ltp * (1 - 0.0075);   // 0.75% below (Improved from 0.25%)
+    const target = ltp * (1 - 0.0075); // 0.75% below (Improved from 0.25%)
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
 
     const signal: StrategySignal = {
       symbol,
-      action: 'SELL',
+      action: "SELL",
       stopLoss,
       target,
       marginMultiplier,
       useTrailingSL: true, // Enable trailing SL for this strategy
       reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)})`,
-      confidence: 0.8 // Increased confidence due to filters
+      confidence: 0.8, // Increased confidence due to filters
     };
 
     const riskPerShare = stopLoss - ltp;
     const rewardPerShare = ltp - target;
     const riskRewardRatio = rewardPerShare / riskPerShare;
 
-    logger.info('📉 SELL SIGNAL - Price crossed BELOW day low', {
+    logger.info("📉 SELL SIGNAL - Price crossed BELOW day low", {
       symbol,
       prevLtp: `₹${prevLtp.toFixed(2)}`,
       dayLow: `₹${dayLow.toFixed(2)}`,
@@ -336,12 +395,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) >= dayLow (${dayLow.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) < dayLow`,
       stopLoss: `₹${stopLoss.toFixed(2)} (0.5% above)`,
       target: `₹${target.toFixed(2)} (0.25% below)`,
-      riskReward: `1:${riskRewardRatio.toFixed(2)}`
+      riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
-    logger.audit('STRATEGY_SIGNAL', {
+    logger.audit("STRATEGY_SIGNAL", {
       strategy: this.name,
-      signal
+      signal,
     });
 
     this.emitSignal(signal);
@@ -356,10 +415,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.positionClosedAt = Date.now();
       state.isInCooldown = true;
 
-      logger.info(`🔒 [${position.symbol}] Position closed - 15-minute cooldown started`, {
-        closedAt: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }),
-        cooldownEndsAt: new Date(Date.now() + this.COOLDOWN_PERIOD_MS).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
-      });
+      logger.info(
+        `🔒 [${position.symbol}] Position closed - 15-minute cooldown started`,
+        {
+          closedAt: new Date().toLocaleTimeString("en-IN", {
+            timeZone: "Asia/Kolkata",
+          }),
+          cooldownEndsAt: new Date(
+            Date.now() + this.COOLDOWN_PERIOD_MS,
+          ).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }),
+        },
+      );
     }
   }
 
@@ -376,17 +442,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         positionClosedAt: null,
         isInCooldown: false,
         lastLogTime: 0,
-        lastResetDate: ''
+        lastResetDate: "",
       });
 
-      logger.info('Symbol added to strategy watchlist', { symbol });
+      logger.info("Symbol added to strategy watchlist", { symbol });
     }
   }
 
   public removeSymbol(symbol: string): void {
     this.symbolStates.delete(symbol);
-    this.watchlist = this.watchlist.filter(s => s !== symbol);
-    logger.info('Symbol removed from strategy watchlist', { symbol });
+    this.watchlist = this.watchlist.filter((s) => s !== symbol);
+    logger.info("Symbol removed from strategy watchlist", { symbol });
   }
 
   public getWatchlist(): string[] {
@@ -394,7 +460,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   }
 
   public resetDailyData(): void {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
 
     for (const state of this.symbolStates.values()) {
       // Reset current day's data
@@ -413,7 +479,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // Reset volume tracker for new day
     volumeTracker.resetSessionVolume();
 
-    logger.info('Daily data reset for all symbols');
-    logger.audit('STRATEGY_DAILY_RESET', { strategy: this.name });
+    logger.info("Daily data reset for all symbols");
+    logger.audit("STRATEGY_DAILY_RESET", { strategy: this.name });
   }
 }

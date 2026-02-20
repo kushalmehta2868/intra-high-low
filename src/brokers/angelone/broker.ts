@@ -1,15 +1,24 @@
-import { BaseBroker } from '../base';
-import { AngelOneClient } from './client';
-import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade, MarketData } from '../../types';
-import { BrokerConfig } from '../../types';
-import { logger } from '../../utils/logger';
-import { symbolTokenService } from '../../services/symbolTokenService';
-import { WebSocketDataFeed } from '../../services/websocketDataFeed';
-import { marketDataCache } from '../../services/marketDataCache';
-import { configManager } from '../../config';
-import { productTypeValidator } from '../../services/productTypeValidator';
-import { exchangeValidator } from '../../services/exchangeValidator';
-import { tickSizeRounder } from '../../services/tickSizeRounder';
+import { BaseBroker } from "../base";
+import { AngelOneClient } from "./client";
+import {
+  Order,
+  Position,
+  OrderSide,
+  OrderType,
+  OrderStatus,
+  PositionType,
+  Trade,
+  MarketData,
+} from "../../types";
+import { BrokerConfig } from "../../types";
+import { logger } from "../../utils/logger";
+import { symbolTokenService } from "../../services/symbolTokenService";
+import { WebSocketDataFeed } from "../../services/websocketDataFeed";
+import { marketDataCache } from "../../services/marketDataCache";
+import { configManager } from "../../config";
+import { productTypeValidator } from "../../services/productTypeValidator";
+import { exchangeValidator } from "../../services/exchangeValidator";
+import { tickSizeRounder } from "../../services/tickSizeRounder";
 
 interface PositionMetadata {
   stopLoss?: number;
@@ -41,11 +50,11 @@ export class AngelOneBroker extends BaseBroker {
       this.isConnected = success;
 
       if (success) {
-        logger.info('Angel One broker connected successfully');
+        logger.info("Angel One broker connected successfully");
 
         // Refresh symbol token cache on connect
         await symbolTokenService.refreshCache();
-        logger.info('Symbol token cache refreshed');
+        logger.info("Symbol token cache refreshed");
 
         // Initialize WebSocket data feed for REAL mode
         if (this.watchlist.length > 0) {
@@ -53,7 +62,7 @@ export class AngelOneBroker extends BaseBroker {
             this.wsDataFeed = new WebSocketDataFeed(this.client);
 
             // Forward market data events from WebSocket to broker listeners AND cache
-            this.wsDataFeed.on('market_data', (data: MarketData) => {
+            this.wsDataFeed.on("market_data", (data: MarketData) => {
               try {
                 // Update cache for instant access (eliminates API calls)
                 marketDataCache.update(data);
@@ -61,73 +70,83 @@ export class AngelOneBroker extends BaseBroker {
                 // Forward to strategies
                 this.emitMarketData(data);
               } catch (dataError: any) {
-                logger.error('Error processing market data', {
+                logger.error("Error processing market data", {
                   error: dataError.message,
-                  symbol: data?.symbol
+                  symbol: data?.symbol,
                 });
               }
             });
 
             // CRITICAL: Add error handler to prevent crashes
-            this.wsDataFeed.on('error', (error: Error) => {
-              logger.error('WebSocket error event', {
+            this.wsDataFeed.on("error", (error: Error) => {
+              logger.error("WebSocket error event", {
                 error: error.message,
-                willRetry: true
+                willRetry: true,
               });
               // Error is logged, WebSocket will auto-reconnect
             });
 
             // Connect to WebSocket with timeout
-            logger.info('🔌 Connecting to WebSocket (30s timeout)...');
+            logger.info("🔌 Connecting to WebSocket (30s timeout)...");
             const wsConnected = await Promise.race([
               this.wsDataFeed.connect(),
               new Promise<boolean>((resolve) => {
                 setTimeout(() => {
-                  logger.warn('⚠️ WebSocket connection timeout - will retry in background');
+                  logger.warn(
+                    "⚠️ WebSocket connection timeout - will retry in background",
+                  );
                   resolve(false);
                 }, 30000); // 30 second timeout
-              })
+              }),
             ]);
 
             if (wsConnected) {
-              logger.info('✅ WebSocket connected for REAL mode');
+              logger.info("✅ WebSocket connected for REAL mode");
 
               try {
                 // Subscribe to all watchlist symbols
-                await this.wsDataFeed.subscribeMultiple(this.watchlist, 'SNAP_QUOTE');
-                logger.info('✅ Subscribed to symbols via WebSocket', {
-                  count: this.watchlist.length
+                await this.wsDataFeed.subscribeMultiple(
+                  this.watchlist,
+                  "SNAP_QUOTE",
+                );
+                logger.info("✅ Subscribed to symbols via WebSocket", {
+                  count: this.watchlist.length,
                 });
               } catch (subError: any) {
-                logger.error('Failed to subscribe to symbols', {
+                logger.error("Failed to subscribe to symbols", {
                   error: subError.message,
-                  willRetry: 'Subscription will retry on reconnect'
+                  willRetry: "Subscription will retry on reconnect",
                 });
               }
             } else {
-              logger.warn('⚠️ WebSocket connection failed - market data will be limited');
-              logger.info('WebSocket will retry connection in background');
+              logger.warn(
+                "⚠️ WebSocket connection failed - market data will be limited",
+              );
+              logger.info("WebSocket will retry connection in background");
               // Don't throw - continue with API fallback
             }
           } catch (wsError: any) {
-            logger.error('❌ WebSocket initialization failed', {
+            logger.error("❌ WebSocket initialization failed", {
               error: wsError.message,
               stack: wsError.stack,
-              impact: 'Market data will use API fallback (slower, rate limited)'
+              impact:
+                "Market data will use API fallback (slower, rate limited)",
             });
             // Don't throw - continue without WebSocket
             this.wsDataFeed = null;
           }
         } else {
-          logger.warn('⚠️ No watchlist provided - market data streaming disabled in REAL mode');
+          logger.warn(
+            "⚠️ No watchlist provided - market data streaming disabled in REAL mode",
+          );
         }
       } else {
-        logger.error('Failed to connect to Angel One broker');
+        logger.error("Failed to connect to Angel One broker");
       }
 
       return success;
     } catch (error: any) {
-      logger.error('Connection error', error);
+      logger.error("Connection error", error);
       this.emitError(error);
       return false;
     }
@@ -140,12 +159,14 @@ export class AngelOneBroker extends BaseBroker {
     if (this.wsDataFeed) {
       this.wsDataFeed.disconnect();
       this.wsDataFeed = null;
-      logger.info('WebSocket data feed disconnected');
+      logger.info("WebSocket data feed disconnected");
     }
 
     // Clear position metadata on disconnect
     this.positionMetadata.clear();
-    logger.info('Disconnected from Angel One broker - position metadata cleared');
+    logger.info(
+      "Disconnected from Angel One broker - position metadata cleared",
+    );
   }
 
   public async placeOrder(
@@ -155,24 +176,24 @@ export class AngelOneBroker extends BaseBroker {
     quantity: number,
     price?: number,
     stopPrice?: number,
-    target?: number
+    target?: number,
   ): Promise<Order | null> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
+      logger.error("Broker not connected");
       return null;
     }
 
     try {
       const symbolToken = await this.getSymbolToken(symbol);
       if (!symbolToken) {
-        logger.error('Symbol token not found', { symbol });
+        logger.error("Symbol token not found", { symbol });
         return null;
       }
 
       // Validate exchange for symbol
       const correctExchange = exchangeValidator.getExchangeForSymbol(symbol);
       if (!correctExchange) {
-        logger.error('Cannot determine exchange for symbol', { symbol });
+        logger.error("Cannot determine exchange for symbol", { symbol });
         return null;
       }
 
@@ -181,25 +202,29 @@ export class AngelOneBroker extends BaseBroker {
       // stoploss = stop-loss trigger price (absolute)
       const useROBOOrder = (stopPrice || target) && type === OrderType.MARKET;
 
-      const productType = 'INTRADAY';
+      const productType = "INTRADAY";
       if (!productTypeValidator.validateOrderProductType(productType)) {
-        logger.error('Invalid product type validation failed');
+        logger.error("Invalid product type validation failed");
         return null;
       }
 
       const orderRequest = {
-        variety: useROBOOrder ? 'ROBO' : 'NORMAL',
+        variety: useROBOOrder ? "ROBO" : "NORMAL",
         tradingsymbol: symbol,
         symboltoken: symbolToken,
         transactiontype: side,
         exchange: correctExchange, // ✅ Use validated exchange
         ordertype: this.mapOrderType(type),
-        producttype: productType as 'INTRADAY',
-        duration: 'DAY' as const,
-        price: price ? tickSizeRounder.roundToTickSize(price).toFixed(2) : '0',
-        squareoff: target ? tickSizeRounder.roundToTickSize(target).toFixed(2) : '0',
-        stoploss: stopPrice ? tickSizeRounder.roundToTickSize(stopPrice).toFixed(2) : '0',
-        quantity: quantity.toString()
+        producttype: productType as "INTRADAY",
+        duration: "DAY" as const,
+        price: price ? tickSizeRounder.roundToTickSize(price).toFixed(2) : "0",
+        squareoff: target
+          ? tickSizeRounder.roundToTickSize(target).toFixed(2)
+          : "0",
+        stoploss: stopPrice
+          ? tickSizeRounder.roundToTickSize(stopPrice).toFixed(2)
+          : "0",
+        quantity: quantity.toString(),
       };
 
       const orderId = await this.client.placeOrder(orderRequest);
@@ -217,31 +242,31 @@ export class AngelOneBroker extends BaseBroker {
           filledQuantity: 0,
           averagePrice: 0,
           timestamp: new Date(),
-          broker: 'AngelOne'
+          broker: "AngelOne",
         };
 
         // Store stopLoss and target metadata for this symbol
         if (stopPrice || target) {
           this.positionMetadata.set(symbol, {
             stopLoss: stopPrice,
-            target: target
+            target: target,
           });
 
           if (useROBOOrder) {
-            logger.info('✅ BRACKET Order placed with built-in exits', {
+            logger.info("✅ BRACKET Order placed with built-in exits", {
               orderId,
               symbol,
-              orderType: 'ROBO (Bracket)',
-              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : 'N/A',
-              target: target ? `₹${target.toFixed(2)}` : 'N/A',
-              note: 'Stop-loss and target will execute automatically'
+              orderType: "ROBO (Bracket)",
+              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : "N/A",
+              target: target ? `₹${target.toFixed(2)}` : "N/A",
+              note: "Stop-loss and target will execute automatically",
             });
           } else {
-            logger.info('Order placed with exit levels (manual monitoring)', {
+            logger.info("Order placed with exit levels (manual monitoring)", {
               orderId,
               symbol,
-              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : 'N/A',
-              target: target ? `₹${target.toFixed(2)}` : 'N/A'
+              stopLoss: stopPrice ? `₹${stopPrice.toFixed(2)}` : "N/A",
+              target: target ? `₹${target.toFixed(2)}` : "N/A",
             });
           }
         }
@@ -252,30 +277,32 @@ export class AngelOneBroker extends BaseBroker {
 
       return null;
     } catch (error: any) {
-      logger.error('Place order error', error);
+      logger.error("Place order error", error);
       this.emitError(error);
       return null;
     }
   }
 
-  private mapOrderType(type: OrderType): 'MARKET' | 'LIMIT' | 'STOPLOSS_LIMIT' | 'STOPLOSS_MARKET' {
+  private mapOrderType(
+    type: OrderType,
+  ): "MARKET" | "LIMIT" | "STOPLOSS_LIMIT" | "STOPLOSS_MARKET" {
     switch (type) {
       case OrderType.MARKET:
-        return 'MARKET';
+        return "MARKET";
       case OrderType.LIMIT:
-        return 'LIMIT';
+        return "LIMIT";
       case OrderType.STOP_LOSS:
-        return 'STOPLOSS_LIMIT';
+        return "STOPLOSS_LIMIT";
       case OrderType.STOP_LOSS_MARKET:
-        return 'STOPLOSS_MARKET';
+        return "STOPLOSS_MARKET";
       default:
-        return 'MARKET';
+        return "MARKET";
     }
   }
 
   public async cancelOrder(orderId: string): Promise<boolean> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
+      logger.error("Broker not connected");
       return false;
     }
 
@@ -284,7 +311,7 @@ export class AngelOneBroker extends BaseBroker {
 
   public async getOrders(): Promise<Order[]> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
+      logger.error("Broker not connected");
       return [];
     }
 
@@ -292,7 +319,7 @@ export class AngelOneBroker extends BaseBroker {
       const orderBook = await this.client.getOrderBook();
       return orderBook.map((order: any) => this.mapAngelOrderToOrder(order));
     } catch (error: any) {
-      logger.error('Get orders error', error);
+      logger.error("Get orders error", error);
       return [];
     }
   }
@@ -304,59 +331,76 @@ export class AngelOneBroker extends BaseBroker {
       side: angelOrder.transactiontype as OrderSide,
       type: this.mapAngelOrderType(angelOrder.ordertype),
       quantity: parseInt(angelOrder.quantity),
-      price: parseFloat(angelOrder.price || '0'),
-      stopPrice: parseFloat(angelOrder.triggerprice || '0'),
+      price: parseFloat(angelOrder.price || "0"),
+      stopPrice: parseFloat(angelOrder.triggerprice || "0"),
       status: this.mapAngelOrderStatus(angelOrder.orderstatus),
-      filledQuantity: parseInt(angelOrder.filledshares || '0'),
-      averagePrice: parseFloat(angelOrder.averageprice || '0'),
+      filledQuantity: parseInt(angelOrder.filledshares || "0"),
+      averagePrice: parseFloat(angelOrder.averageprice || "0"),
       timestamp: new Date(angelOrder.ordertime),
-      broker: 'AngelOne'
+      broker: "AngelOne",
     };
   }
 
   private mapAngelOrderType(type: string): OrderType {
     switch (type) {
-      case 'MARKET': return OrderType.MARKET;
-      case 'LIMIT': return OrderType.LIMIT;
-      case 'STOPLOSS_LIMIT': return OrderType.STOP_LOSS;
-      case 'STOPLOSS_MARKET': return OrderType.STOP_LOSS_MARKET;
-      default: return OrderType.MARKET;
+      case "MARKET":
+        return OrderType.MARKET;
+      case "LIMIT":
+        return OrderType.LIMIT;
+      case "STOPLOSS_LIMIT":
+        return OrderType.STOP_LOSS;
+      case "STOPLOSS_MARKET":
+        return OrderType.STOP_LOSS_MARKET;
+      default:
+        return OrderType.MARKET;
     }
   }
 
   private mapAngelOrderStatus(status: string): OrderStatus {
     switch (status.toUpperCase()) {
-      case 'PENDING': return OrderStatus.PENDING;
-      case 'OPEN': return OrderStatus.SUBMITTED;
-      case 'COMPLETE': return OrderStatus.FILLED;
-      case 'REJECTED': return OrderStatus.REJECTED;
-      case 'CANCELLED': return OrderStatus.CANCELLED;
-      default: return OrderStatus.PENDING;
+      case "PENDING":
+        return OrderStatus.PENDING;
+      case "OPEN":
+        return OrderStatus.SUBMITTED;
+      case "COMPLETE":
+        return OrderStatus.FILLED;
+      case "REJECTED":
+        return OrderStatus.REJECTED;
+      case "CANCELLED":
+        return OrderStatus.CANCELLED;
+      default:
+        return OrderStatus.PENDING;
     }
   }
 
   public async getPositions(): Promise<Position[]> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
-      return [];
+      logger.error("Broker not connected");
+      throw new Error("Broker not connected - cannot fetch positions");
     }
 
     try {
       const positions = await this.client.getPositions();
+      // Only filter out zero-quantity positions on a successful response
       return positions
         .filter((pos: any) => parseInt(pos.netqty) !== 0)
         .map((pos: any) => this.mapAngelPositionToPosition(pos));
     } catch (error: any) {
-      logger.error('Get positions error', error);
-      return [];
+      logger.error(
+        "Get positions error - throwing to prevent false reconciliation failures",
+        error,
+      );
+      // CRITICAL: Throw instead of returning [] so reconciliation service
+      // can distinguish between "no positions" and "API error"
+      throw error;
     }
   }
 
   private mapAngelPositionToPosition(angelPos: any): Position {
     const quantity = parseInt(angelPos.netqty);
-    const avgPrice = parseFloat(angelPos.netprice || angelPos.avgprice || '0');
-    const ltp = parseFloat(angelPos.ltp || '0');
-    const pnl = parseFloat(angelPos.pnl || '0');
+    const avgPrice = parseFloat(angelPos.netprice || angelPos.avgprice || "0");
+    const ltp = parseFloat(angelPos.ltp || "0");
+    const pnl = parseFloat(angelPos.pnl || "0");
     const symbol = angelPos.tradingsymbol;
 
     // Get stored metadata for this position
@@ -371,56 +415,57 @@ export class AngelOneBroker extends BaseBroker {
       stopLoss: metadata?.stopLoss,
       target: metadata?.target,
       pnl: pnl,
-      pnlPercent: avgPrice !== 0 ? (pnl / (avgPrice * Math.abs(quantity))) * 100 : 0,
-      entryTime: new Date()
+      pnlPercent:
+        avgPrice !== 0 ? (pnl / (avgPrice * Math.abs(quantity))) * 100 : 0,
+      entryTime: new Date(),
     };
   }
 
   public async getAccountBalance(): Promise<number> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
+      logger.error("Broker not connected");
       return 0;
     }
 
     try {
       const rmsData = await this.client.getRMS();
-      return parseFloat(rmsData?.net || '0');
+      return parseFloat(rmsData?.net || "0");
     } catch (error: any) {
-      logger.error('Get account balance error', error);
+      logger.error("Get account balance error", error);
       return 0;
     }
   }
 
   public async getLTP(symbol: string): Promise<number | null> {
     if (!this.isConnected) {
-      logger.error('Broker not connected');
+      logger.error("Broker not connected");
       return null;
     }
 
     // OPTIMIZATION: Try cache first (WebSocket data) - eliminates API call
     const cachedLTP = marketDataCache.getLTP(symbol);
     if (cachedLTP !== null) {
-      logger.debug('LTP from cache (WebSocket)', {
+      logger.debug("LTP from cache (WebSocket)", {
         symbol,
         ltp: `₹${cachedLTP.toFixed(2)}`,
-        source: 'WebSocket Cache'
+        source: "WebSocket Cache",
       });
       return cachedLTP;
     }
 
     // Fallback: Use API only if cache miss (no WebSocket data yet)
-    logger.debug('Cache miss - fetching LTP from API', { symbol });
+    logger.debug("Cache miss - fetching LTP from API", { symbol });
 
     try {
       const symbolToken = await this.getSymbolToken(symbol);
       if (!symbolToken) {
-        logger.error('Symbol token not found', { symbol });
+        logger.error("Symbol token not found", { symbol });
         return null;
       }
 
-      return await this.client.getLTP('NSE', symbol, symbolToken);
+      return await this.client.getLTP("NSE", symbol, symbolToken);
     } catch (error: any) {
-      logger.error('Get LTP error', error);
+      logger.error("Get LTP error", error);
       return null;
     }
   }
@@ -429,6 +474,8 @@ export class AngelOneBroker extends BaseBroker {
    * @deprecated Tokens are now fetched dynamically. This method is kept for backwards compatibility.
    */
   public addSymbolToken(symbol: string, token: string): void {
-    logger.warn('addSymbolToken is deprecated - tokens are now fetched dynamically');
+    logger.warn(
+      "addSymbolToken is deprecated - tokens are now fetched dynamically",
+    );
   }
 }
