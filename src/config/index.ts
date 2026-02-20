@@ -1,5 +1,11 @@
-import dotenv from 'dotenv';
-import { AppConfig, TradingMode, TradingConfig, BrokerConfig, TelegramConfig } from '../types';
+import dotenv from "dotenv";
+import {
+  AppConfig,
+  TradingMode,
+  TradingConfig,
+  BrokerConfig,
+  TelegramConfig,
+} from "../types";
 
 dotenv.config();
 
@@ -16,8 +22,8 @@ class ConfigManager {
       trading: this.loadTradingConfig(),
       broker: this.loadBrokerConfig(),
       telegram: this.loadTelegramConfig(),
-      logLevel: process.env.LOG_LEVEL || 'info',
-      enableAuditLog: process.env.ENABLE_AUDIT_LOG === 'true'
+      logLevel: process.env.LOG_LEVEL || "info",
+      enableAuditLog: process.env.ENABLE_AUDIT_LOG === "true",
     };
   }
 
@@ -26,19 +32,25 @@ class ConfigManager {
 
     return {
       mode: mode === TradingMode.REAL ? TradingMode.REAL : TradingMode.PAPER,
-      autoSquareOffTime: process.env.AUTO_SQUARE_OFF_TIME || '15:20',
-      marketStartTime: process.env.MARKET_START_TIME || '09:15',
-      marketEndTime: process.env.MARKET_END_TIME || '15:30',
-      signalStartTime: process.env.SIGNAL_START_TIME || '09:30',
-      signalEndTime: process.env.SIGNAL_END_TIME || '15:00',
-      killSwitch: process.env.KILL_SWITCH === 'true',
+      autoSquareOffTime: process.env.AUTO_SQUARE_OFF_TIME || "15:15",
+      marketStartTime: process.env.MARKET_START_TIME || "09:15",
+      marketEndTime: process.env.MARKET_END_TIME || "15:30",
+      signalStartTime: process.env.SIGNAL_START_TIME || "10:15",
+      signalEndTime: process.env.SIGNAL_END_TIME || "14:45",
+      killSwitch: process.env.KILL_SWITCH === "true",
       riskLimits: {
-        maxRiskPerTradePercent: parseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT || '2'),
-        maxDailyLossPercent: parseFloat(process.env.MAX_DAILY_LOSS_PERCENT || '5'),
-        positionSizePercent: parseFloat(process.env.POSITION_SIZE_PERCENT || '10'),
-        marginMultiplier: parseFloat(process.env.MARGIN_MULTIPLIER || '5'),
-        useMargin: process.env.USE_MARGIN !== 'false'
-      }
+        maxRiskPerTradePercent: parseFloat(
+          process.env.MAX_RISK_PER_TRADE_PERCENT || "2",
+        ),
+        maxDailyLossPercent: parseFloat(
+          process.env.MAX_DAILY_LOSS_PERCENT || "5",
+        ),
+        positionSizePercent: parseFloat(
+          process.env.POSITION_SIZE_PERCENT || "10",
+        ),
+        marginMultiplier: parseFloat(process.env.MARGIN_MULTIPLIER || "5"),
+        useMargin: process.env.USE_MARGIN !== "false",
+      },
     };
   }
 
@@ -53,25 +65,25 @@ class ConfigManager {
 
     if (isReal) {
       return {
-        apiKey: process.env.ANGEL_API_KEY_REAL || '',
-        clientId: process.env.ANGEL_CLIENT_ID_REAL || '',
-        password: process.env.ANGEL_PASSWORD_REAL || '',
-        totpSecret: process.env.ANGEL_TOTP_SECRET_REAL || ''
+        apiKey: process.env.ANGEL_API_KEY_REAL || "",
+        clientId: process.env.ANGEL_CLIENT_ID_REAL || "",
+        password: process.env.ANGEL_PASSWORD_REAL || "",
+        totpSecret: process.env.ANGEL_TOTP_SECRET_REAL || "",
       };
     } else {
       return {
-        apiKey: process.env.ANGEL_API_KEY_PAPER || '',
-        clientId: process.env.ANGEL_CLIENT_ID_PAPER || '',
-        password: process.env.ANGEL_PASSWORD_PAPER || '',
-        totpSecret: process.env.ANGEL_TOTP_SECRET_PAPER || ''
+        apiKey: process.env.ANGEL_API_KEY_PAPER || "",
+        clientId: process.env.ANGEL_CLIENT_ID_PAPER || "",
+        password: process.env.ANGEL_PASSWORD_PAPER || "",
+        totpSecret: process.env.ANGEL_TOTP_SECRET_PAPER || "",
       };
     }
   }
 
   private loadTelegramConfig(): TelegramConfig {
     return {
-      botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-      chatId: process.env.TELEGRAM_CHAT_ID || ''
+      botToken: process.env.TELEGRAM_BOT_TOKEN || "",
+      chatId: process.env.TELEGRAM_CHAT_ID || "",
     };
   }
 
@@ -80,57 +92,73 @@ class ConfigManager {
 
     // 1. Environment Lock (CRITICAL SAFETY)
     if (this.config.trading.mode === TradingMode.REAL) {
-      if (process.env.FORCE_REAL_MODE !== 'YES_I_AM_SURE') {
-        errors.push('CRITICAL: REAL TRADING MODE BLOCKED.');
-        errors.push('You must set FORCE_REAL_MODE=YES_I_AM_SURE in .env to enable real trading.');
-        errors.push('This is a safety lock to prevent accidental capital loss.');
+      if (process.env.FORCE_REAL_MODE !== "YES_I_AM_SURE") {
+        errors.push("CRITICAL: REAL TRADING MODE BLOCKED.");
+        errors.push(
+          "You must set FORCE_REAL_MODE=YES_I_AM_SURE in .env to enable real trading.",
+        );
+        errors.push(
+          "This is a safety lock to prevent accidental capital loss.",
+        );
       }
 
       // Check Real Credentials
-      if (!this.config.broker.apiKey) errors.push('ANGEL_API_KEY_REAL is required for REAL mode');
-      if (!this.config.broker.clientId) errors.push('ANGEL_CLIENT_ID_REAL is required for REAL mode');
-      if (!this.config.broker.password) errors.push('ANGEL_PASSWORD_REAL is required for REAL mode');
-      if (!this.config.broker.totpSecret) errors.push('ANGEL_TOTP_SECRET_REAL is required for REAL mode');
+      if (!this.config.broker.apiKey)
+        errors.push("ANGEL_API_KEY_REAL is required for REAL mode");
+      if (!this.config.broker.clientId)
+        errors.push("ANGEL_CLIENT_ID_REAL is required for REAL mode");
+      if (!this.config.broker.password)
+        errors.push("ANGEL_PASSWORD_REAL is required for REAL mode");
+      if (!this.config.broker.totpSecret)
+        errors.push("ANGEL_TOTP_SECRET_REAL is required for REAL mode");
     } else {
       // Check Paper Credentials
-      if (!this.config.broker.apiKey) errors.push('ANGEL_API_KEY_PAPER is required for PAPER mode');
-      if (!this.config.broker.clientId) errors.push('ANGEL_CLIENT_ID_PAPER is required for PAPER mode');
-      if (!this.config.broker.password) errors.push('ANGEL_PASSWORD_PAPER is required for PAPER mode');
-      if (!this.config.broker.totpSecret) errors.push('ANGEL_TOTP_SECRET_PAPER is required for PAPER mode');
+      if (!this.config.broker.apiKey)
+        errors.push("ANGEL_API_KEY_PAPER is required for PAPER mode");
+      if (!this.config.broker.clientId)
+        errors.push("ANGEL_CLIENT_ID_PAPER is required for PAPER mode");
+      if (!this.config.broker.password)
+        errors.push("ANGEL_PASSWORD_PAPER is required for PAPER mode");
+      if (!this.config.broker.totpSecret)
+        errors.push("ANGEL_TOTP_SECRET_PAPER is required for PAPER mode");
     }
 
     if (!this.config.telegram.botToken) {
-      errors.push('TELEGRAM_BOT_TOKEN is required');
+      errors.push("TELEGRAM_BOT_TOKEN is required");
     }
 
     if (!this.config.telegram.chatId) {
-      errors.push('TELEGRAM_CHAT_ID is required');
+      errors.push("TELEGRAM_CHAT_ID is required");
     }
 
-    if (this.config.trading.riskLimits.maxRiskPerTradePercent <= 0 ||
-      this.config.trading.riskLimits.maxRiskPerTradePercent > 100) {
-      errors.push('MAX_RISK_PER_TRADE_PERCENT must be between 0 and 100');
+    if (
+      this.config.trading.riskLimits.maxRiskPerTradePercent <= 0 ||
+      this.config.trading.riskLimits.maxRiskPerTradePercent > 100
+    ) {
+      errors.push("MAX_RISK_PER_TRADE_PERCENT must be between 0 and 100");
     }
 
-    if (this.config.trading.riskLimits.maxDailyLossPercent <= 0 ||
-      this.config.trading.riskLimits.maxDailyLossPercent > 100) {
-      errors.push('MAX_DAILY_LOSS_PERCENT must be between 0 and 100');
+    if (
+      this.config.trading.riskLimits.maxDailyLossPercent <= 0 ||
+      this.config.trading.riskLimits.maxDailyLossPercent > 100
+    ) {
+      errors.push("MAX_DAILY_LOSS_PERCENT must be between 0 and 100");
     }
 
     if (!this.isValidTime(this.config.trading.autoSquareOffTime)) {
-      errors.push('AUTO_SQUARE_OFF_TIME must be in HH:MM format');
+      errors.push("AUTO_SQUARE_OFF_TIME must be in HH:MM format");
     }
 
     if (!this.isValidTime(this.config.trading.marketStartTime)) {
-      errors.push('MARKET_START_TIME must be in HH:MM format');
+      errors.push("MARKET_START_TIME must be in HH:MM format");
     }
 
     if (!this.isValidTime(this.config.trading.marketEndTime)) {
-      errors.push('MARKET_END_TIME must be in HH:MM format');
+      errors.push("MARKET_END_TIME must be in HH:MM format");
     }
 
     if (errors.length > 0) {
-      throw new Error(`Configuration validation failed:\n${errors.join('\n')}`);
+      throw new Error(`Configuration validation failed:\n${errors.join("\n")}`);
     }
   }
 
