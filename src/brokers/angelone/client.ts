@@ -607,4 +607,8 @@ export class AngelOneClient {
   public getClientCode(): string {
     return this.config.clientId;
   }
+
+  public getApiKey(): string {
+    return this.config.apiKey;
+  }
 }

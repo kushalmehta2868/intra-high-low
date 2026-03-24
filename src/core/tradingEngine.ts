@@ -164,10 +164,22 @@ export class TradingEngine extends EventEmitter {
     this.positionManager.on("position_opened", (position: Position) => {
       logger.info("Position opened", position);
       this.telegramBot.sendPositionUpdate(position.symbol, 0, 0, "OPENED");
+
+      // Keep every strategy's context in sync and trigger cooldown/state logic
+      for (const strategy of this.strategies.values()) {
+        strategy.setContextPosition(position.symbol, position);
+        strategy.onPositionUpdate(position);
+      }
     });
 
     this.positionManager.on("position_closed", (position: any) => {
       logger.info("Position closed", position);
+
+      // Remove from every strategy's context and notify for cooldown/state reset
+      for (const strategy of this.strategies.values()) {
+        strategy.removeContextPosition(position.symbol);
+        strategy.onPositionUpdate({ ...position, quantity: 0 });
+      }
 
       // Record trade with detailed information for daily summary
       const pnlPercent =
@@ -240,7 +252,12 @@ export class TradingEngine extends EventEmitter {
           "Stop Loss Triggered",
           `Symbol: ${position.symbol}\nPrice: ₹${position.currentPrice.toFixed(2)}`,
         );
-        await this.closePosition(position.symbol, "Stop loss triggered");
+        // Use position lock to prevent duplicate close orders from rapid ticks
+        await positionLockManager.withLock(position.symbol, async () => {
+          if (this.positionManager.hasPosition(position.symbol)) {
+            await this.closePosition(position.symbol, "Stop loss triggered");
+          }
+        });
       },
     );
 
@@ -250,7 +267,12 @@ export class TradingEngine extends EventEmitter {
         "Target Reached",
         `Symbol: ${position.symbol}\nPrice: ₹${position.currentPrice.toFixed(2)}`,
       );
-      await this.closePosition(position.symbol, "Target reached");
+      // Use position lock to prevent duplicate close orders from rapid ticks
+      await positionLockManager.withLock(position.symbol, async () => {
+        if (this.positionManager.hasPosition(position.symbol)) {
+          await this.closePosition(position.symbol, "Target reached");
+        }
+      });
     });
 
     this.riskManager.on("daily_loss_limit_reached", async (data: any) => {
@@ -559,13 +581,6 @@ export class TradingEngine extends EventEmitter {
             );
             return null;
           });
-
-          if (!currentPrice) {
-            logger.warn("Price fetch failed - skipping signal", {
-              symbol: signal.symbol,
-            });
-            return;
-          }
 
           if (!currentPrice) {
             logger.warn("Price fetch failed - skipping signal", {
@@ -1282,7 +1297,15 @@ export class TradingEngine extends EventEmitter {
       this.startBackgroundReconnection();
     }
 
-    this.initialBalance = await this.broker.getAccountBalance();
+    const fetchedBalance = await this.broker.getAccountBalance();
+    if (fetchedBalance > 0) {
+      this.initialBalance = fetchedBalance;
+      logger.info('Account balance loaded from broker', { balance: `₹${fetchedBalance.toLocaleString()}` });
+    } else {
+      logger.warn('Broker returned 0 balance (possibly not connected) - using constructor default', {
+        fallback: `₹${this.initialBalance.toLocaleString()}`
+      });
+    }
     this.riskManager.resetStartingBalance(this.initialBalance);
 
     await this.positionManager.syncPositions();

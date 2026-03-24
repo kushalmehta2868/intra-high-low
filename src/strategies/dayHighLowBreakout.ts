@@ -8,6 +8,12 @@ import {
 import { logger } from "../utils/logger";
 import { getSymbolMarginMultiplier } from "../config/symbolConfig";
 import { volumeTracker } from "../services/volumeTracker";
+import { strategyStateStore } from "../services/strategyStateStore";
+
+interface PendingSignal {
+  direction: 'BUY' | 'SELL';
+  breakoutLevel: number;
+}
 
 interface SymbolState {
   // Current day OHLC
@@ -18,23 +24,32 @@ interface SymbolState {
   // Track previous LTP for cross detection
   prevLtp: number;
 
-  // Breakout flags - ensure single signal per day
+  // Breakout flags - ensure single signal per direction per cooldown window
   hasBrokenHighToday: boolean;
   hasBrokenLowToday: boolean;
+
+  // Hard cap: max 2 trades per stock per calendar day
+  tradesExecutedToday: number;
 
   // Cooldown after position close
   positionClosedAt: number | null; // Timestamp when position was closed
   isInCooldown: boolean; // Whether symbol is in cooldown period
 
+  // 2-tick breakout confirmation: set on first cross, cleared on confirm/cancel
+  pendingSignal: PendingSignal | null;
+
+  // Circuit breaker detection: timestamp of last price movement
+  lastPriceChangeAt: number;
+
   lastLogTime: number; // Track last log time for periodic logging
-  lastResetDate: string; // Track when we last reset for new day
+  lastResetDate: string; // Track when we last reset for new day (IST YYYY-MM-DD)
 }
 
 export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private symbolStates: Map<string, SymbolState> = new Map();
   private watchlist: string[] = [];
   private readonly LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes in milliseconds
-  private readonly COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes cooldown after position close
+  private readonly COOLDOWN_PERIOD_MS = 10 * 60 * 1000; // 10 minutes cooldown after position close
 
   constructor(context: StrategyContext, watchlist: string[] = []) {
     super("DayHighLowBreakout", context);
@@ -44,7 +59,33 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   public async initialize(): Promise<void> {
     await super.initialize();
 
+    // Load persisted state for today (survives bot restarts mid-day)
+    const savedStates = strategyStateStore.loadTodayState();
+    const restoredSymbols: string[] = [];
+
     for (const symbol of this.watchlist) {
+      const saved = savedStates[symbol];
+      const now = Date.now();
+
+      let restoredCooldown = false;
+      let restoredTrades = 0;
+      let positionClosedAt: number | null = null;
+      let isInCooldown = false;
+
+      if (saved) {
+        restoredTrades = saved.tradesExecutedToday;
+        if (saved.isInCooldown && saved.cooldownExpiresAt !== null) {
+          if (saved.cooldownExpiresAt > now) {
+            // Cooldown still active — restore with adjusted positionClosedAt
+            isInCooldown = true;
+            positionClosedAt = saved.cooldownExpiresAt - this.COOLDOWN_PERIOD_MS;
+            restoredCooldown = true;
+          }
+          // else: cooldown expired during downtime — start fresh, no cooldown
+        }
+        restoredSymbols.push(symbol);
+      }
+
       this.symbolStates.set(symbol, {
         dayHigh: 0,
         dayLow: Infinity,
@@ -52,16 +93,33 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         prevLtp: 0,
         hasBrokenHighToday: false,
         hasBrokenLowToday: false,
-        positionClosedAt: null,
-        isInCooldown: false,
+        tradesExecutedToday: restoredTrades,
+        positionClosedAt,
+        isInCooldown,
+        pendingSignal: null,
+        lastPriceChangeAt: now,
         lastLogTime: 0,
-        lastResetDate: "",
+        lastResetDate: saved?.lastResetDate || "",
       });
+
+      if (saved) {
+        logger.info(`[${symbol}] Restored persistent state`, {
+          tradesExecutedToday: restoredTrades,
+          cooldownRestored: restoredCooldown,
+          cooldownEndsAt: restoredCooldown && positionClosedAt
+            ? new Date(positionClosedAt + this.COOLDOWN_PERIOD_MS).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+            : 'N/A',
+        });
+      }
     }
 
-    logger.info("DayHighLowBreakout strategy initialized", {
-      watchlist: this.watchlist,
-    });
+    if (restoredSymbols.length > 0) {
+      logger.info(`DayHighLowBreakout strategy initialized with restored state for ${restoredSymbols.length} symbol(s)`);
+    } else {
+      logger.info("DayHighLowBreakout strategy initialized (fresh state)", {
+        watchlist: this.watchlist,
+      });
+    }
   }
 
   public onMarketData(data: MarketData): void {
@@ -87,6 +145,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.dayHigh = data.high || data.ltp; // Initialize from real data, not 0
       state.dayLow = data.low || data.ltp; // Initialize from real data, not Infinity
       state.prevLtp = data.ltp;
+      state.lastPriceChangeAt = Date.now();
       logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
         open: `₹${state.open.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
@@ -95,12 +154,24 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       });
     }
 
+    // Track price movement for circuit breaker detection
+    if (data.ltp !== state.prevLtp) {
+      state.lastPriceChangeAt = Date.now();
+    }
+
+    // Check pending signal confirmation (2-tick confirmation logic)
+    if (state.pendingSignal) {
+      this.checkPendingSignalConfirmation(data.symbol, data.ltp, state);
+    }
+
     // Cache previous levels BEFORE update
     const prevDayHigh = state.dayHigh;
     const prevDayLow = state.dayLow;
 
-    // Detect breakout using previous levels
-    this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
+    // Detect breakout using previous levels (only if no pending signal already)
+    if (!state.pendingSignal) {
+      this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
+    }
 
     // Now update current day's high/low
     state.dayHigh = Math.max(state.dayHigh, data.high, data.ltp);
@@ -117,9 +188,15 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
    * Check if it's a new trading day and reset state accordingly
    */
   private checkAndResetForNewDay(state: SymbolState): void {
-    const today = new Date().toISOString().split("T")[0];
+    // Use IST date so the reset happens at IST midnight, not UTC midnight
+    const istDate = new Date().toLocaleString("en-CA", { timeZone: "Asia/Kolkata" }).split(",")[0].trim();
 
-    if (state.lastResetDate !== today) {
+    if (state.lastResetDate !== istDate) {
+      // Clear persisted state file when a new day is detected
+      if (state.lastResetDate !== "") {
+        strategyStateStore.clearDailyState();
+      }
+
       // Reset for new trading day
       state.dayHigh = 0;
       state.dayLow = Infinity;
@@ -127,11 +204,14 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.prevLtp = 0;
       state.hasBrokenHighToday = false;
       state.hasBrokenLowToday = false;
+      state.tradesExecutedToday = 0;
       state.positionClosedAt = null;
       state.isInCooldown = false;
-      state.lastResetDate = today;
+      state.pendingSignal = null;
+      state.lastPriceChangeAt = Date.now();
+      state.lastResetDate = istDate;
 
-      logger.info(`🔄 New trading day - state reset`, { date: today });
+      logger.info(`🔄 New trading day - state reset`, { date: istDate });
     }
   }
 
@@ -144,18 +224,86 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       const timeSinceClose = now - state.positionClosedAt;
 
       if (timeSinceClose >= this.COOLDOWN_PERIOD_MS) {
-        // Cooldown period has elapsed
         state.isInCooldown = false;
         state.positionClosedAt = null;
-        state.hasBrokenHighToday = false;
-        state.hasBrokenLowToday = false;
 
-        logger.info(
-          `⏰ [${symbol}] Cooldown period ended - ready for new signals`,
-          {
-            cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} minutes`,
-          },
-        );
+        // Persist updated state after cooldown expires
+        this.saveSymbolState(symbol, state);
+
+        const MAX_TRADES_PER_STOCK_PER_DAY = 2;
+        const remainingTrades = MAX_TRADES_PER_STOCK_PER_DAY - state.tradesExecutedToday;
+
+        if (remainingTrades > 0) {
+          // Allow re-entry in both directions for remaining trade slots
+          state.hasBrokenHighToday = false;
+          state.hasBrokenLowToday = false;
+          logger.info(
+            `⏰ [${symbol}] Cooldown ended - ready for new signals (${remainingTrades} trade(s) remaining today)`,
+            { cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} min` },
+          );
+        } else {
+          // Daily cap reached — cooldown cleared but no new signals allowed
+          logger.info(
+            `⏰ [${symbol}] Cooldown ended - daily trade limit reached (${MAX_TRADES_PER_STOCK_PER_DAY}/${MAX_TRADES_PER_STOCK_PER_DAY}), no more signals today`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Saves the persistent portion of a symbol's state to disk.
+   */
+  private saveSymbolState(symbol: string, state: SymbolState): void {
+    const istDate = new Date().toLocaleString("en-CA", { timeZone: "Asia/Kolkata" }).split(",")[0].trim();
+    strategyStateStore.saveSymbolState(symbol, {
+      tradesExecutedToday: state.tradesExecutedToday,
+      isInCooldown: state.isInCooldown,
+      cooldownExpiresAt: state.positionClosedAt !== null
+        ? state.positionClosedAt + this.COOLDOWN_PERIOD_MS
+        : null,
+      lastResetDate: istDate,
+    });
+  }
+
+  /**
+   * 2-tick confirmation: if the pending signal direction is still valid on the
+   * next tick, emit the signal. If price reversed, cancel and allow re-detection.
+   */
+  private checkPendingSignalConfirmation(symbol: string, ltp: number, state: SymbolState): void {
+    const pending = state.pendingSignal!;
+
+    if (pending.direction === 'BUY') {
+      if (ltp > pending.breakoutLevel) {
+        // Confirmed: price still above breakout level on second tick
+        state.pendingSignal = null;
+        state.tradesExecutedToday++;
+        this.saveSymbolState(symbol, state);
+        this.on_buy_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp);
+      } else {
+        // Reversed: cancel pending signal, reset flag so we can try again
+        logger.info(`🔁 [${symbol}] BUY breakout not confirmed (price reversed) - resetting`, {
+          breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
+          currentLtp: `₹${ltp.toFixed(2)}`,
+        });
+        state.pendingSignal = null;
+        state.hasBrokenHighToday = false;
+      }
+    } else {
+      if (ltp < pending.breakoutLevel) {
+        // Confirmed: price still below breakout level on second tick
+        state.pendingSignal = null;
+        state.tradesExecutedToday++;
+        this.saveSymbolState(symbol, state);
+        this.on_sell_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp);
+      } else {
+        // Reversed: cancel pending signal, reset flag so we can try again
+        logger.info(`🔁 [${symbol}] SELL breakout not confirmed (price reversed) - resetting`, {
+          breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
+          currentLtp: `₹${ltp.toFixed(2)}`,
+        });
+        state.pendingSignal = null;
+        state.hasBrokenLowToday = false;
       }
     }
   }
@@ -234,12 +382,34 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       return;
     }
 
+    // Hard cap: maximum 2 trades per stock per day
+    const MAX_TRADES_PER_STOCK_PER_DAY = 2;
+    if (state.tradesExecutedToday >= MAX_TRADES_PER_STOCK_PER_DAY) {
+      return;
+    }
+
     // Can't check cross without previous LTP or valid day high/low
     if (
       state.prevLtp === 0 ||
       state.dayHigh === 0 ||
       state.dayLow === Infinity
     ) {
+      return;
+    }
+
+    // SHOULD FIX #8 — Gap-up / gap-down guard: skip breakout signals in first 5 minutes.
+    // Gap opens create false breakouts where open price == day high/low.
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const currentTime = `${String(istNow.getHours()).padStart(2, '0')}:${String(istNow.getMinutes()).padStart(2, '0')}`;
+    if (currentTime < '09:20') {
+      return;
+    }
+
+    // SHOULD FIX #11 — Circuit breaker guard: if price has not moved in 3+ minutes,
+    // the stock is likely halted. Skip signals to avoid acting on stale data.
+    const CIRCUIT_FREEZE_MS = 3 * 60 * 1000;
+    if (Date.now() - state.lastPriceChangeAt > CIRCUIT_FREEZE_MS) {
+      logger.warn(`⛔ [${data.symbol}] Price frozen for 3+ min - possible circuit breaker, skipping signal`);
       return;
     }
 
@@ -263,16 +433,19 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
               .getAvgFiveMinVolume(data.symbol)
               .toFixed(0),
             required: "2.0x",
-            completedCandles: volumeTracker.getCompletedCandleCount(
-              data.symbol,
-            ),
+            completedCandles: volumeTracker.getCompletedCandleCount(data.symbol),
           },
         );
-        return; // Reject signal without setting hasBrokenHighToday
+        return;
       }
 
+      // SHOULD FIX #7 — 2-tick confirmation: set pending signal, emit on next tick if confirmed
       state.hasBrokenHighToday = true;
-      this.on_buy_signal(data.symbol, ltp, dayHigh, prevLtp);
+      state.pendingSignal = { direction: 'BUY', breakoutLevel: dayHigh };
+      logger.info(`⏳ [${data.symbol}] BUY breakout detected - awaiting 1-tick confirmation`, {
+        dayHigh: `₹${dayHigh.toFixed(2)}`,
+        ltp: `₹${ltp.toFixed(2)}`,
+      });
       return;
     }
 
@@ -290,16 +463,19 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
               .getAvgFiveMinVolume(data.symbol)
               .toFixed(0),
             required: "2.0x",
-            completedCandles: volumeTracker.getCompletedCandleCount(
-              data.symbol,
-            ),
+            completedCandles: volumeTracker.getCompletedCandleCount(data.symbol),
           },
         );
-        return; // Reject signal without setting hasBrokenLowToday
+        return;
       }
 
+      // SHOULD FIX #7 — 2-tick confirmation
       state.hasBrokenLowToday = true;
-      this.on_sell_signal(data.symbol, ltp, dayLow, prevLtp);
+      state.pendingSignal = { direction: 'SELL', breakoutLevel: dayLow };
+      logger.info(`⏳ [${data.symbol}] SELL breakout detected - awaiting 1-tick confirmation`, {
+        dayLow: `₹${dayLow.toFixed(2)}`,
+        ltp: `₹${ltp.toFixed(2)}`,
+      });
       return;
     }
   }
@@ -313,10 +489,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     dayHigh: number,
     prevLtp: number,
   ): void {
-    // Stop Loss: 0.5% below entry
-    // Target: 0.75% above entry (Improved RR Ratio)
-    const stopLoss = ltp * (1 - 0.005); // 0.5% below
-    const target = ltp * (1 + 0.0075); // 0.75% above (Improved from 0.25%)
+    // Stop Loss: 0.25% below entry  |  Target: 0.5% above entry  (1:2 R:R)
+    const stopLoss = ltp * (1 - 0.0025); // 0.25% below
+    const target = ltp * (1 + 0.005);   // 0.5% above
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -342,8 +517,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       dayHigh: `₹${dayHigh.toFixed(2)}`,
       currentLtp: `₹${ltp.toFixed(2)}`,
       crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) <= dayHigh (${dayHigh.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) > dayHigh`,
-      stopLoss: `₹${stopLoss.toFixed(2)} (0.5% below)`,
-      target: `₹${target.toFixed(2)} (0.25% above)`,
+      stopLoss: `₹${stopLoss.toFixed(2)} (0.25% below)`,
+      target: `₹${target.toFixed(2)} (0.5% above)`,
       riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
@@ -364,10 +539,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     dayLow: number,
     prevLtp: number,
   ): void {
-    // Stop Loss: 0.5% above entry
-    // Target: 0.75% below entry (Improved RR Ratio)
-    const stopLoss = ltp * (1 + 0.005); // 0.5% above
-    const target = ltp * (1 - 0.0075); // 0.75% below (Improved from 0.25%)
+    // Stop Loss: 0.25% above entry  |  Target: 0.5% below entry  (1:2 R:R)
+    const stopLoss = ltp * (1 + 0.0025); // 0.25% above
+    const target = ltp * (1 - 0.005);   // 0.5% below
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -393,8 +567,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       dayLow: `₹${dayLow.toFixed(2)}`,
       currentLtp: `₹${ltp.toFixed(2)}`,
       crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) >= dayLow (${dayLow.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) < dayLow`,
-      stopLoss: `₹${stopLoss.toFixed(2)} (0.5% above)`,
-      target: `₹${target.toFixed(2)} (0.25% below)`,
+      stopLoss: `₹${stopLoss.toFixed(2)} (0.25% above)`,
+      target: `₹${target.toFixed(2)} (0.5% below)`,
       riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
@@ -411,12 +585,16 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     if (!state) return;
 
     if (position.quantity === 0) {
-      // Position closed - start 15-minute cooldown
+      // Position closed - start 10-minute cooldown
       state.positionClosedAt = Date.now();
       state.isInCooldown = true;
+      state.pendingSignal = null; // Cancel any pending signal on close
+
+      // Persist cooldown state immediately so restart survives
+      this.saveSymbolState(position.symbol, state);
 
       logger.info(
-        `🔒 [${position.symbol}] Position closed - 15-minute cooldown started`,
+        `🔒 [${position.symbol}] Position closed - 10-minute cooldown started`,
         {
           closedAt: new Date().toLocaleTimeString("en-IN", {
             timeZone: "Asia/Kolkata",
@@ -439,8 +617,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         prevLtp: 0,
         hasBrokenHighToday: false,
         hasBrokenLowToday: false,
+        tradesExecutedToday: 0,
         positionClosedAt: null,
         isInCooldown: false,
+        pendingSignal: null,
+        lastPriceChangeAt: Date.now(),
         lastLogTime: 0,
         lastResetDate: "",
       });
@@ -460,7 +641,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   }
 
   public resetDailyData(): void {
-    const today = new Date().toISOString().split("T")[0];
+    // Use IST date (consistent with checkAndResetForNewDay)
+    const today = new Date().toLocaleString("en-CA", { timeZone: "Asia/Kolkata" }).split(",")[0].trim();
+
+    // Clear persisted state file for the new day
+    strategyStateStore.clearDailyState();
 
     for (const state of this.symbolStates.values()) {
       // Reset current day's data
@@ -470,8 +655,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.prevLtp = 0;
       state.hasBrokenHighToday = false;
       state.hasBrokenLowToday = false;
+      state.tradesExecutedToday = 0;
       state.positionClosedAt = null;
       state.isInCooldown = false;
+      state.pendingSignal = null;
+      state.lastPriceChangeAt = Date.now();
       state.lastLogTime = 0;
       state.lastResetDate = today;
     }

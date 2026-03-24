@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { RiskLimits, Position, Order, OrderSide } from '../types';
+import { RiskLimits, OrderSide } from '../types';
 import { logger } from '../utils/logger';
 import { chargesCalculator } from '../services/chargesCalculator';
 
@@ -55,8 +55,8 @@ export class RiskManager extends EventEmitter {
   }
 
   public checkOrderRisk(
-    symbol: string,
-    side: OrderSide,
+    _symbol: string,
+    _side: OrderSide,
     quantity: number,
     price: number,
     stopLoss?: number,
@@ -64,7 +64,14 @@ export class RiskManager extends EventEmitter {
   ): RiskCheckResult {
     this.resetDailyCounters();
 
-    // 1. Check Max Open Positions (New Block)
+    // 1. Check Max Daily Trades (system-wide cap across all symbols)
+    if (this.tradesExecutedToday >= this.riskLimits.maxTradesPerDay) {
+      const reason = `Max trades per day limit reached (${this.riskLimits.maxTradesPerDay})`;
+      logger.warn('Risk check failed', { reason, tradesExecutedToday: this.tradesExecutedToday });
+      return { allowed: false, reason };
+    }
+
+    // 2. Check Max Open Positions (New Block)
     // Hard limit of 5 concurrent positions for risk diversification
     const MAX_OPEN_POSITIONS = 5;
     if (currentOpenPositions >= MAX_OPEN_POSITIONS) {
@@ -226,7 +233,15 @@ export class RiskManager extends EventEmitter {
     const lossPercentage = (Math.abs(this.dailyPnL) / this.startingBalance) * 100;
 
     if (this.dailyPnL < 0) {
-      if (Math.abs(this.dailyPnL) >= dailyLossLimit * 0.8) {
+      if (Math.abs(this.dailyPnL) >= dailyLossLimit) {
+        // Limit breached by a completed trade — stop trading immediately
+        logger.error('Daily loss limit reached after trade', {
+          dailyPnL: this.dailyPnL,
+          limit: dailyLossLimit,
+          percentage: lossPercentage
+        });
+        this.emit('daily_loss_limit_reached', { dailyPnL: this.dailyPnL, limit: dailyLossLimit });
+      } else if (Math.abs(this.dailyPnL) >= dailyLossLimit * 0.8) {
         logger.warn('Approaching daily loss limit', {
           dailyPnL: this.dailyPnL,
           limit: dailyLossLimit,

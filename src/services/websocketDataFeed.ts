@@ -37,6 +37,7 @@ export class WebSocketDataFeed extends EventEmitter {
   private authToken: string | null = null;
   private feedToken: string | null = null;
   private clientCode: string | null = null;
+  private apiKey: string | null = null;
 
   // Logging throttle - log market data every 10 seconds
   private lastLogTime: Map<string, number> = new Map();
@@ -97,13 +98,15 @@ export class WebSocketDataFeed extends EventEmitter {
       this.authToken = authToken;
       this.feedToken = feedToken;
       this.clientCode = clientCode;
+      this.apiKey = this.client.getApiKey();
 
       // Create WebSocket connection with promise to wait for connection
       return new Promise((resolve, reject) => {
         try {
           // CRITICAL: Angel One WebSocket authentication via URL parameters
           // Format: wss://smartapisocket.angelone.in/smart-stream?jwtToken=xxx&apiKey=yyy&clientCode=zzz&feedToken=www
-          const wsUrl = `${this.config.url}?jwtToken=${authToken}&apiKey=${authToken}&clientCode=${clientCode}&feedToken=${feedToken}`;
+          // NOTE: apiKey must be the API key from Angel One developer portal, NOT the JWT session token
+          const wsUrl = `${this.config.url}?jwtToken=${authToken}&apiKey=${this.apiKey}&clientCode=${clientCode}&feedToken=${feedToken}`;
 
           logger.info('🔌 Creating WebSocket connection with auth parameters', {
             baseUrl: this.config.url,
@@ -195,6 +198,17 @@ export class WebSocketDataFeed extends EventEmitter {
 
     // Start heartbeat
     this.startHeartbeat();
+
+    // CRITICAL: Resubscribe to all symbols after reconnect
+    // On the initial connect, subscriptions is empty so this is a no-op.
+    // On reconnect, it sends a batch subscription message for all previously subscribed symbols.
+    if (this.subscriptions.size > 0) {
+      logger.info('🔄 Resubscribing to all symbols after reconnect', {
+        count: this.subscriptions.size
+      });
+      // Small delay to ensure auth message is processed first
+      setTimeout(() => this.resubscribeAll(), 500);
+    }
 
     this.emit('connected');
   }
