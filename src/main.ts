@@ -3,98 +3,50 @@ import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
 import configManager from './config';
 import { logger } from './utils/logger';
 import { healthCheckServer } from './utils/healthCheck';
-import { holidayCalendar } from './services/holidayCalendar';
 
 async function main() {
   try {
     logger.info('Initializing Angel Intraday Trading Bot');
     logger.info('='.repeat(50));
 
-    // CRITICAL: Check if today is a trading day before doing anything
+    // Check if today is a weekend
     const today = new Date();
-    if (!holidayCalendar.isTradingDay(today)) {
-      const istDate = new Date(today.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istDate = new Date(today.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const dayOfWeek = istDate.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
       const dayName = istDate.toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'Asia/Kolkata' });
       const dateStr = istDate.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-      // Check if it's a weekend or a holiday
-      const dayOfWeek = istDate.getDay();
-      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-      const isHoliday = holidayCalendar.isHoliday(today);
-
-      let reason = '';
-      if (isWeekend) {
-        reason = `${dayName} (Weekend)`;
-      } else if (isHoliday) {
-        const yearHolidays = holidayCalendar.getHolidaysForYear(istDate.getFullYear());
-        const todayHoliday = yearHolidays.find(h => h.date === `${istDate.getFullYear()}-${String(istDate.getMonth() + 1).padStart(2, '0')}-${String(istDate.getDate()).padStart(2, '0')}`);
-        reason = todayHoliday ? `${todayHoliday.name} (Market Holiday)` : 'Market Holiday';
-      }
-
-      logger.info('🚫 NON-TRADING DAY DETECTED');
+      logger.info('🚫 WEEKEND DETECTED');
       logger.info('='.repeat(50));
       logger.info(`Date: ${dateStr}`);
-      logger.info(`Reason: ${reason}`);
+      logger.info(`Reason: ${dayName} (Weekend)`);
       logger.info('='.repeat(50));
-      logger.info('Bot will NOT start on non-trading days.');
-      logger.info('The bot will remain idle and consume minimal resources.');
-      logger.info('No messages, no connections, no operations will be performed.');
+      logger.info('Bot will NOT start on weekends.');
 
       // Start health check server in minimal mode (for Render.com to keep service alive)
       healthCheckServer.start();
       healthCheckServer.updateStatus(true, false);
 
-      logger.info('Health check server started (minimal mode for hosting).');
-      logger.info('Bot is sleeping until next trading day...');
-
-      // Get next trading day info
-      const nextTradingDay = holidayCalendar.getNextTradingDay(today);
-      const nextTradingDayStr = nextTradingDay.toLocaleDateString('en-IN', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: 'Asia/Kolkata'
-      });
-      logger.info(`📅 Next trading day: ${nextTradingDayStr}`);
-      logger.info('='.repeat(50));
-
-      // CRITICAL: Check every hour if it's now a trading day
-      // This allows bot to automatically start on next trading day
-      const tradingDayCheckInterval = setInterval(() => {
+      // Check every hour if it's now a weekday
+      const weekdayCheckInterval = setInterval(() => {
         const now = new Date();
         const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const currentDay = istNow.getDay();
 
-        if (holidayCalendar.isTradingDay(now)) {
-          logger.info('✅ TRADING DAY DETECTED - Restarting bot...');
-          logger.info(`Date: ${istNow.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
-
-          // Clear interval
-          clearInterval(tradingDayCheckInterval);
-
-          // Restart the process to initialize properly
+        if (currentDay !== 0 && currentDay !== 6) {
+          logger.info('✅ WEEKDAY DETECTED - Restarting bot...');
+          clearInterval(weekdayCheckInterval);
           logger.info('🔄 Process will restart in 5 seconds...');
           setTimeout(() => {
-            process.exit(0); // Exit cleanly, Render will restart it
+            process.exit(0);
           }, 5000);
-        } else {
-          // Log daily that we're still sleeping
-          const currentHour = istNow.getHours();
-          if (currentHour === 9) { // Log once at 9 AM IST
-            logger.info(`💤 Still sleeping (non-trading day) - Next check in 1 hour`);
-          }
         }
       }, 60 * 60 * 1000); // Check every 1 hour
 
-      // Don't let interval prevent shutdown
-      tradingDayCheckInterval.unref();
+      weekdayCheckInterval.unref();
 
-      logger.info('🔍 Trading day check running every 1 hour');
-      logger.info('Bot will automatically restart when next trading day arrives');
-
-      // Keep process alive but do nothing (for Render.com)
-      // Just wait indefinitely - no trading operations
-      await new Promise(() => { }); // Never resolves, keeps process alive
+      await new Promise(() => { });
       return;
     }
 
