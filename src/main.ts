@@ -3,6 +3,7 @@ import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
 import configManager from './config';
 import { logger } from './utils/logger';
 import { healthCheckServer } from './utils/healthCheck';
+import { isNSEHoliday, getNSEHolidayName } from './utils/nseHolidays';
 
 async function main() {
   try {
@@ -45,6 +46,40 @@ async function main() {
       }, 60 * 60 * 1000); // Check every 1 hour
 
       weekdayCheckInterval.unref();
+
+      await new Promise(() => { });
+      return;
+    }
+
+    // Check if today is an NSE holiday
+    if (isNSEHoliday(today)) {
+      const holidayName = getNSEHolidayName(today) ?? 'NSE Holiday';
+      const dateStr = istDate.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+      logger.info('🚫 NSE HOLIDAY DETECTED');
+      logger.info('='.repeat(50));
+      logger.info(`Date: ${dateStr}`);
+      logger.info(`Reason: ${holidayName}`);
+      logger.info('='.repeat(50));
+      logger.info('Bot will NOT start on NSE holidays.');
+
+      healthCheckServer.start();
+      healthCheckServer.updateStatus(true, false);
+
+      // Check every hour if the holiday is over (next trading day)
+      const holidayCheckInterval = setInterval(() => {
+        const now = new Date();
+        const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const currentDay = istNow.getDay();
+
+        if (!isNSEHoliday(now) && currentDay !== 0 && currentDay !== 6) {
+          logger.info('✅ TRADING DAY DETECTED - Restarting bot...');
+          clearInterval(holidayCheckInterval);
+          setTimeout(() => { process.exit(0); }, 5000);
+        }
+      }, 60 * 60 * 1000); // Check every 1 hour
+
+      holidayCheckInterval.unref();
 
       await new Promise(() => { });
       return;

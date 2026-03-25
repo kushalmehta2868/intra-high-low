@@ -401,7 +401,11 @@ export class AngelOneBroker extends BaseBroker {
     const avgPrice = parseFloat(angelPos.netprice || angelPos.avgprice || "0");
     const ltp = parseFloat(angelPos.ltp || "0");
     const pnl = parseFloat(angelPos.pnl || "0");
-    const symbol = angelPos.tradingsymbol;
+    // Normalize symbol: Angel One API returns "INFY" but bot tracks as "INFY-EQ"
+    const rawSymbol = angelPos.tradingsymbol;
+    const symbol = (angelPos.instrumenttype === 'EQ' || angelPos.exchange === 'NSE') && !rawSymbol.includes('-')
+      ? `${rawSymbol}-EQ`
+      : rawSymbol;
 
     // Get stored metadata for this position
     const metadata = this.positionMetadata.get(symbol);

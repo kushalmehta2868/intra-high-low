@@ -128,7 +128,6 @@ export class TradingEngine extends EventEmitter {
 
     this.broker.on("error", (error: Error) => {
       logger.error("Broker error", error);
-      this.telegramBot.sendAlert("Broker Error", error.message);
     });
 
     // Forward market data to all strategies
@@ -163,7 +162,6 @@ export class TradingEngine extends EventEmitter {
 
     this.positionManager.on("position_opened", (position: Position) => {
       logger.info("Position opened", position);
-      this.telegramBot.sendPositionUpdate(position.symbol, 0, 0, "OPENED");
 
       // Keep every strategy's context in sync and trigger cooldown/state logic
       for (const strategy of this.strategies.values()) {
@@ -248,10 +246,6 @@ export class TradingEngine extends EventEmitter {
       "stop_loss_triggered",
       async (position: Position) => {
         logger.warn("Stop loss triggered", position);
-        await this.telegramBot.sendAlert(
-          "Stop Loss Triggered",
-          `Symbol: ${position.symbol}\nPrice: ₹${position.currentPrice.toFixed(2)}`,
-        );
         // Use position lock to prevent duplicate close orders from rapid ticks
         await positionLockManager.withLock(position.symbol, async () => {
           if (this.positionManager.hasPosition(position.symbol)) {
@@ -263,10 +257,6 @@ export class TradingEngine extends EventEmitter {
 
     this.positionManager.on("target_reached", async (position: Position) => {
       logger.info("Target reached", position);
-      await this.telegramBot.sendAlert(
-        "Target Reached",
-        `Symbol: ${position.symbol}\nPrice: ₹${position.currentPrice.toFixed(2)}`,
-      );
       // Use position lock to prevent duplicate close orders from rapid ticks
       await positionLockManager.withLock(position.symbol, async () => {
         if (this.positionManager.hasPosition(position.symbol)) {
@@ -285,11 +275,8 @@ export class TradingEngine extends EventEmitter {
       configManager.setKillSwitch(true);
     });
 
-    this.riskManager.on("approaching_daily_loss_limit", async (data: any) => {
-      await this.telegramBot.sendRiskAlert(
-        "Approaching Daily Loss Limit",
-        `Daily P&L: ₹${data.dailyPnL.toFixed(2)}\nPercentage: ${data.percentage.toFixed(2)}%\nLimit: ${data.limit.toFixed(2)}`,
-      );
+    this.riskManager.on("approaching_daily_loss_limit", (data: any) => {
+      logger.warn("Approaching daily loss limit", data);
     });
 
     this.scheduler.on("market_open", async () => {
@@ -316,10 +303,6 @@ export class TradingEngine extends EventEmitter {
 
     this.scheduler.on("auto_square_off", async () => {
       logger.info("🔴 AUTO SQUARE-OFF TRIGGERED");
-      await this.telegramBot.sendAlert(
-        "🔴 Auto Square-Off",
-        "Closing all open positions",
-      );
 
       // Close all positions
       await this.closeAllPositions("Auto square-off");
@@ -457,10 +440,7 @@ export class TradingEngine extends EventEmitter {
       if (success) {
         position.stopLoss = newSL;
         position.isTrailing = true;
-        this.telegramBot.sendAlert(
-          "🛡️ Stop-Loss Moved to Break-Even",
-          `Symbol: ${data.symbol}\nNew SL: ₹${newSL.toFixed(2)}\nProfit hit: ${profitPct.toFixed(2)}%`,
-        );
+        logger.info(`🛡️ SL moved to break-even for ${data.symbol}`, { newSL: newSL.toFixed(2), profit: profitPct.toFixed(2) });
       }
       return;
     }
@@ -647,36 +627,21 @@ export class TradingEngine extends EventEmitter {
           this.riskManager.updateBalance(currentBalance);
           this.metricsTracker.updateBalance(currentBalance);
 
-          // Calculate quantity
+          // Calculate quantity: always use 5x margin multiplier
           let quantity = signal.quantity;
           if (!quantity) {
-            const marginMultiplier =
-              signal.marginMultiplier ||
-              this.config.trading.riskLimits.marginMultiplier ||
-              5;
-            // Use POSITION_SIZE_PERCENT of current balance (with margin) as max capital per trade
+            const MARGIN_MULTIPLIER = 5;
             const positionSizePct =
               this.config.trading.riskLimits.positionSizePercent || 10;
-            const effectiveBalance = currentBalance * marginMultiplier;
-            const maxCapitalForTrade =
-              (positionSizePct / 100) * effectiveBalance;
-            const maxQuantityByCapital = Math.floor(
-              maxCapitalForTrade / currentPrice,
-            );
-            const riskBasedQuantity = this.riskManager.calculatePositionSize(
-              currentPrice,
-              stopLoss,
-            );
-            quantity = Math.min(maxQuantityByCapital, riskBasedQuantity);
+            const capitalForTrade =
+              (positionSizePct / 100) * currentBalance * MARGIN_MULTIPLIER;
+            quantity = Math.floor(capitalForTrade / currentPrice);
 
             logger.info("Quantity calculated", {
               symbol: signal.symbol,
               currentPrice: `₹${currentPrice.toFixed(2)}`,
               currentBalance: `₹${currentBalance.toFixed(2)}`,
-              effectiveBalance: `₹${effectiveBalance.toFixed(2)}`,
-              maxCapitalForTrade: `₹${maxCapitalForTrade.toFixed(2)}`,
-              maxQuantityByCapital,
-              riskBasedQuantity,
+              capitalForTrade: `₹${capitalForTrade.toFixed(2)}`,
               finalQuantity: quantity,
               orderValue: `₹${(quantity * currentPrice).toFixed(2)}`,
             });
@@ -727,10 +692,6 @@ export class TradingEngine extends EventEmitter {
               signal,
               reason: riskCheck.reason,
             });
-            await this.telegramBot.sendAlert(
-              "Risk Check Failed",
-              riskCheck.reason || "Unknown reason",
-            );
             orderIdempotencyManager.markOrderFailed(
               orderKey,
               riskCheck.reason || "Risk check failed",
@@ -841,10 +802,7 @@ export class TradingEngine extends EventEmitter {
 
                   if (cancelled) {
                     orderCancelled = true;
-                    await this.telegramBot.sendAlert(
-                      "⏰ Order Timeout",
-                      `Limit order for ${signal.symbol} cancelled after ${this.ORDER_TIMEOUT_MS / 1000}s (not filled)`,
-                    );
+                    logger.warn(`⏰ Order timeout - cancelled for ${signal.symbol}`);
                   }
                 } catch (error: any) {
                   logger.error("Error cancelling order timeout", {
@@ -912,10 +870,6 @@ export class TradingEngine extends EventEmitter {
               filled: filledQuantity,
               percentFilled: `${((filledQuantity / quantity) * 100).toFixed(1)}%`,
             });
-            await this.telegramBot.sendAlert(
-              "⚠️ Partial Fill",
-              `Order ${order.orderId} for ${signal.symbol}\nExpected: ${quantity}\nFilled: ${filledQuantity} (${((filledQuantity / quantity) * 100).toFixed(1)}%)`,
-            );
           }
 
           // For PAPER mode, stop-loss is handled by broker simulation
@@ -974,10 +928,6 @@ export class TradingEngine extends EventEmitter {
       logger.warn(
         "Signal processing skipped - position lock could not be acquired",
         { signal },
-      );
-      await this.telegramBot.sendAlert(
-        "Signal Skipped",
-        `Could not process signal for ${signal.symbol} - position is being modified by another operation`,
       );
     }
   }
@@ -1333,14 +1283,11 @@ export class TradingEngine extends EventEmitter {
     // IMPROVEMENT: Set up reconciliation event handlers
     this.positionReconciliation.on(
       "reconciliation_mismatch",
-      async (data: any) => {
-        await this.telegramBot.sendAlert(
-          "❌ POSITION MISMATCH DETECTED",
-          `Mismatches: ${data.mismatches.length}\n` +
-            `Consecutive failures: ${data.consecutiveFailures}\n\n` +
-            `Details:\n${data.mismatches.map((m: any) => `- ${m.symbol}: ${m.issue}`).join("\n")}\n\n` +
-            `Check logs for full details.`,
-        );
+      (data: any) => {
+        logger.warn("Position mismatch detected", {
+          count: data.mismatches?.length,
+          consecutiveFailures: data.consecutiveFailures,
+        });
       },
     );
 
