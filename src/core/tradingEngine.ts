@@ -295,25 +295,13 @@ export class TradingEngine extends EventEmitter {
     });
 
     this.scheduler.on("market_open", async () => {
-      logger.info(
-        "🟢 Market opened - starting strategies and resetting daily data",
-      );
-
-      // Reset daily data for fresh start (Paper mode)
-      if (this.config.trading.mode === TradingMode.PAPER) {
-        (this.broker as any).resetDailyData?.();
-        logger.info("📅 Daily market data reset - starting fresh");
-      }
-
-      // WebSocket already connected, just start strategies
-      await this.startStrategies();
+      logger.info("🟢 Market opened - resuming all services");
+      await this.resumeForMarketOpen();
     });
 
     this.scheduler.on("market_close", async () => {
-      logger.info("🔴 Market closed - stopping strategies");
-
-      // WebSocket stays connected, just stop strategies
-      await this.stopStrategies();
+      logger.info("🔴 Market closed - shutting down all API activity");
+      await this.pauseForAfterHours();
     });
 
     this.scheduler.on("auto_square_off", async () => {
@@ -990,6 +978,90 @@ export class TradingEngine extends EventEmitter {
     for (const position of positions) {
       await this.closePosition(position.symbol, reason);
     }
+  }
+
+  /**
+   * Called at 3:30 PM IST.
+   * Stops every service that makes API calls so zero network activity
+   * occurs until the next market open at 9:15 AM.
+   */
+  private async pauseForAfterHours(): Promise<void> {
+    logger.info('⏹️ Pausing all API activity for after-hours');
+
+    // 1. Stop strategies and CandleDataService cron jobs
+    await this.stopStrategies();
+
+    // 2. Stop position reconciliation (polls broker every 30 s)
+    if (this.positionReconciliation) {
+      this.positionReconciliation.stop();
+      logger.info('✅ Position reconciliation stopped');
+    }
+
+    // 3. Stop stop-loss order monitoring (REAL mode)
+    this.stopLossManager.stopMonitoring();
+    logger.info('✅ Stop-loss manager stopped');
+
+    // 4. Stop heartbeat monitor
+    this.heartbeatMonitor.stop();
+    logger.info('✅ Heartbeat monitor stopped');
+
+    // 5. Disconnect broker — closes WebSocket and stops ALL data feeds
+    await this.broker.disconnect();
+    logger.info('✅ Broker disconnected — WebSocket closed');
+
+    logger.info('🌙 Bot is idle. Zero API calls until market open at 9:15 AM');
+    await this.telegramBot.sendMessage(
+      '🔴 *Market Closed (3:30 PM)*\n\nAll services paused. Zero API calls until 9:15 AM tomorrow.',
+    ).catch(() => {});
+  }
+
+  /**
+   * Called at 9:15 AM IST.
+   * Reconnects the broker and restarts every service that was paused
+   * by pauseForAfterHours().
+   */
+  private async resumeForMarketOpen(): Promise<void> {
+    logger.info('▶️ Resuming all services for market open');
+
+    // 1. Reconnect broker (re-authenticates + starts WebSocket)
+    const connected = await this.broker.connect();
+    if (!connected) {
+      logger.error('❌ Broker reconnection failed at market open — starting background retry');
+      this.startBackgroundReconnection();
+      return;
+    }
+    logger.info('✅ Broker reconnected');
+
+    // 2. Refresh symbol token cache for the new day
+    await this.positionManager.syncPositions();
+
+    // 3. Reset daily data (Paper mode)
+    if (this.config.trading.mode === TradingMode.PAPER) {
+      (this.broker as any).resetDailyData?.();
+      logger.info('📅 Daily market data reset');
+    }
+
+    // 4. Restart heartbeat monitor
+    this.heartbeatMonitor.start();
+
+    // 5. Restart position reconciliation
+    if (this.positionReconciliation) {
+      this.positionReconciliation.start();
+      logger.info('✅ Position reconciliation restarted');
+    }
+
+    // 6. Restart stop-loss monitoring (REAL mode)
+    if (this.config.trading.mode === TradingMode.REAL) {
+      this.stopLossManager.startMonitoring();
+      logger.info('✅ Stop-loss manager restarted');
+    }
+
+    // 7. Start strategies + CandleDataService
+    await this.startStrategies();
+
+    await this.telegramBot.sendMessage(
+      '🟢 *Market Open (9:15 AM)*\n\nAll services resumed. Trading active.',
+    ).catch(() => {});
   }
 
   private async startStrategies(): Promise<void> {

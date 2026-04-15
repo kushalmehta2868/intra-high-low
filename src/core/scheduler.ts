@@ -61,7 +61,7 @@ export class MarketScheduler extends EventEmitter {
 
   private scheduleMarketStart(): void {
     const [hour, minute] = this.marketStartTime.split(':');
-    const cronExpression = `${minute} ${hour} * * 1-5`;
+    const cronExpression = `${minute} ${hour} * * *`;
 
     this.marketStartJob = cron.schedule(cronExpression, () => {
       logger.info('Market opened');
@@ -73,7 +73,7 @@ export class MarketScheduler extends EventEmitter {
 
   private scheduleMarketEnd(): void {
     const [hour, minute] = this.marketEndTime.split(':');
-    const cronExpression = `${minute} ${hour} * * 1-5`;
+    const cronExpression = `${minute} ${hour} * * *`;
 
     this.marketEndJob = cron.schedule(cronExpression, () => {
       logger.info('Market closed');
@@ -85,7 +85,7 @@ export class MarketScheduler extends EventEmitter {
 
   private scheduleAutoSquareOff(): void {
     const [hour, minute] = this.autoSquareOffTime.split(':');
-    const cronExpression = `${minute} ${hour} * * 1-5`;
+    const cronExpression = `${minute} ${hour} * * *`;
 
     this.squareOffJob = cron.schedule(cronExpression, () => {
       logger.info('Auto square-off time reached');
@@ -105,7 +105,7 @@ export class MarketScheduler extends EventEmitter {
 
   private scheduleDailySummary(): void {
     const [hour, minute] = this.DAILY_SUMMARY_TIME.split(':');
-    const cronExpression = `${minute} ${hour} * * 1-5`; // Monday-Friday at 5 PM
+    const cronExpression = `${minute} ${hour} * * *`; // Every day at 5 PM
 
     this.dailySummaryJob = cron.schedule(cronExpression, () => {
       logger.info('📊 Daily summary time reached - sending report');
@@ -120,34 +120,18 @@ export class MarketScheduler extends EventEmitter {
   }
 
   public isMarketHours(): boolean {
-    // Check if market is open for DATA FETCHING (9:15 AM - 3:30 PM)
+    // Check if current IST time is within data-fetching window (9:15 AM - 3:30 PM)
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-
-    // Check weekends (Saturday = 6, Sunday = 0)
-    const day = istTime.getDay();
-    if (day === 0 || day === 6) {
-      return false;
-    }
-
     const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
-
     return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
   }
 
   public isSignalGenerationHours(): boolean {
-    // Check if we should GENERATE SIGNALS (9:30 AM - 3:00 PM)
+    // Check if current IST time is within signal-generation window (9:30 AM - 3:00 PM)
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-
-    // Check weekends (Saturday = 6, Sunday = 0)
-    const day = istTime.getDay();
-    if (day === 0 || day === 6) {
-      return false;
-    }
-
     const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
-
     return currentTime >= this.signalStartTime && currentTime <= this.signalEndTime;
   }
 

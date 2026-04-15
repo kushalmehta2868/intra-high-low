@@ -389,21 +389,14 @@ export class WebSocketDataFeed extends EventEmitter {
   }
 
   /**
-   * Check if current time is within market hours (IST timezone)
-   * Excludes weekends and checks time range
+   * Check if current IST time is within market hours (9:15 – 3:30).
+   * Day-of-week check is intentionally omitted — the engine controls
+   * whether the bot should run on any given day.
    */
   private isMarketHours(): boolean {
     const now = new Date();
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: this.IST_TIMEZONE }));
-
-    // Check weekends (Saturday = 6, Sunday = 0)
-    const day = istTime.getDay();
-    if (day === 0 || day === 6) {
-      return false;
-    }
-
     const currentTime = `${String(istTime.getHours()).padStart(2, '0')}:${String(istTime.getMinutes()).padStart(2, '0')}`;
-
     return currentTime >= this.marketStartTime && currentTime <= this.marketEndTime;
   }
 
@@ -577,16 +570,67 @@ export class WebSocketDataFeed extends EventEmitter {
   }
 
   /**
-   * Subscribe to multiple symbols
+   * Subscribe to multiple symbols in a single batch WebSocket message.
+   * Fetches all tokens first (using the cached token service), registers
+   * every subscription locally, then sends one message so the server
+   * receives all symbols atomically.
    */
   public async subscribeMultiple(symbols: string[], mode: 'LTP' | 'QUOTE' | 'SNAP_QUOTE' = 'SNAP_QUOTE'): Promise<void> {
-    logger.info('📡 Subscribing to multiple symbols', {
+    logger.info('📡 Subscribing to multiple symbols (batch)', {
       count: symbols.length,
       mode
     });
 
+    const modeNum = mode === 'LTP' ? 1 : mode === 'QUOTE' ? 2 : 3;
+    const tokenList: string[] = [];
+    const failed: string[] = [];
+
+    // Resolve all tokens (token service has an in-memory cache, so this is fast)
     for (const symbol of symbols) {
-      await this.subscribe(symbol, mode);
+      const token = await symbolTokenService.getToken(symbol);
+      if (!token) {
+        logger.warn('⚠️ Cannot subscribe — token not found', { symbol });
+        failed.push(symbol);
+        continue;
+      }
+
+      this.subscriptions.set(symbol, { symbol, token, mode });
+      tokenList.push(token);
+    }
+
+    if (failed.length > 0) {
+      logger.warn('⚠️ Some symbols could not be subscribed (no token)', { failed });
+    }
+
+    if (tokenList.length === 0) {
+      logger.error('❌ No valid tokens — batch subscription aborted');
+      return;
+    }
+
+    // Send a single batch subscription message
+    if (this.isConnected && this.ws) {
+      const subscribeMessage = {
+        action: 1,
+        params: {
+          mode: modeNum,
+          tokenList: [{
+            exchangeType: 1, // NSE
+            tokens: tokenList
+          }]
+        }
+      };
+
+      this.send(subscribeMessage);
+
+      logger.info('✅ Batch subscription sent', {
+        subscribed: tokenList.length,
+        skipped: failed.length,
+        tokens: tokenList
+      });
+    } else {
+      logger.warn('⚠️ WebSocket not connected — subscriptions queued, will activate on reconnect', {
+        queued: tokenList.length
+      });
     }
   }
 
