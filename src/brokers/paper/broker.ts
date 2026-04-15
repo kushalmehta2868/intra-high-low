@@ -816,6 +816,21 @@ export class PaperBroker extends BaseBroker {
   }
 
   /**
+   * Fetch historical OHLCV candles via AngelOneClient.
+   * Used by CandleDataService for technical analysis strategies.
+   */
+  public async getCandleData(
+    exchange: string,
+    symboltoken: string,
+    interval: string,
+    fromdate: string,
+    todate: string,
+  ): Promise<Array<[string, number, number, number, number, number]> | null> {
+    if (!this.angelClient) return null;
+    return this.angelClient.getCandleData(exchange, symboltoken, interval, fromdate, todate);
+  }
+
+  /**
    * Get REAL LTP from Angel One (not simulated)
    */
   public async getLTP(symbol: string): Promise<number | null> {

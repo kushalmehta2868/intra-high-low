@@ -1,5 +1,7 @@
 import { TradingEngine } from './core/tradingEngine';
 import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
+import { EngulfingPatternStrategy } from './strategies/engulfingPattern';
+import { EMACrossoverStrategy } from './strategies/emaCrossover';
 import configManager from './config';
 import { logger } from './utils/logger';
 import { healthCheckServer } from './utils/healthCheck';
@@ -132,32 +134,44 @@ async function main() {
     const initialBalance = 1000000;
     const marginMultiplier = config.trading.riskLimits.marginMultiplier;
 
-    const strategy = new DayHighLowBreakoutStrategy(
-      {
-        marketData: new Map(),
-        positions: new Map(),
-        accountInfo: {
-          balance: initialBalance,
-          availableMargin: initialBalance,
-          usedMargin: 0,
-          realizedPnL: 0,
-          unrealizedPnL: 0,
-          marginMultiplier: marginMultiplier,
-          effectiveBuyingPower: initialBalance * marginMultiplier
-        },
-        config: config.trading
+    const strategyContext = {
+      marketData: new Map(),
+      positions: new Map(),
+      accountInfo: {
+        balance: initialBalance,
+        availableMargin: initialBalance,
+        usedMargin: 0,
+        realizedPnL: 0,
+        unrealizedPnL: 0,
+        marginMultiplier: marginMultiplier,
+        effectiveBuyingPower: initialBalance * marginMultiplier
       },
-      watchlist
-    );
+      config: config.trading
+    };
 
+    // Strategy 1: Day High/Low Breakout (tick-based)
+    const strategy = new DayHighLowBreakoutStrategy(strategyContext, watchlist);
     engine.addStrategy(strategy);
 
-    logger.info('Strategy initialized', {
-      name: strategy.getName(),
-      watchlist,
-      initialBalance: initialBalance,
-      marginMultiplier: marginMultiplier,
-      effectiveBuyingPower: initialBalance * marginMultiplier
+    // Strategy 2: Engulfing Pattern (15-min candle + 1H trend filter)
+    const engulfingStrategy = new EngulfingPatternStrategy(strategyContext, watchlist);
+    engine.addStrategy(engulfingStrategy);
+
+    // Strategy 3: EMA 9/21 Crossover (15-min candle + 1H trend filter)
+    const emaCrossoverStrategy = new EMACrossoverStrategy(strategyContext, watchlist);
+    engine.addStrategy(emaCrossoverStrategy);
+
+    logger.info('All strategies registered', {
+      strategies: [
+        strategy.getName(),
+        engulfingStrategy.getName(),
+        emaCrossoverStrategy.getName(),
+      ],
+      watchlist: watchlist.length,
+      initialBalance,
+      marginMultiplier,
+      effectiveBuyingPower: initialBalance * marginMultiplier,
+      signalArbiterWindow: '15 seconds',
     });
 
     // Flag to prevent multiple shutdown attempts

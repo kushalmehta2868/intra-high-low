@@ -1,0 +1,205 @@
+import { BaseStrategy } from './base';
+import { StrategyContext, StrategySignal, MarketData, Position, Candle } from '../types';
+import { CandleBundle } from '../services/candleDataService';
+import { calculateEMA, calculateATR, get1HTrend, avgVolume } from '../utils/indicators';
+import { getSymbolMarginMultiplier } from '../config/symbolConfig';
+import { logger } from '../utils/logger';
+
+interface DayState {
+  tradesExecutedToday: number;
+  lastResetDate: string;
+  /** Prevent re-firing the same crossover repeatedly until it resets */
+  lastCrossoverDirection: 'BUY' | 'SELL' | null;
+}
+
+/**
+ * EMACrossoverStrategy
+ *
+ * Detects EMA 9 / EMA 21 crossovers on 15-min candles with:
+ *   • Volume confirmation  (current candle > 1.5× 20-bar average)
+ *   • 1H EMA(21) trend filter
+ *   • ATR(14)-based SL & TP  (SL = 1.5×ATR, TP = 3×ATR → 1:2 RR)
+ *
+ * Confidence scoring (base 0.75):
+ *   +0.05  trend aligned
+ *   +0.05  volume ≥ 2× average
+ *   +0.05  EMA9 slope > 0.05% between last two values (momentum)
+ * Max: 0.90
+ *
+ * Called by CandleDataService via handleCandleUpdate() — NOT tick-based.
+ */
+export class EMACrossoverStrategy extends BaseStrategy {
+  private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
+  private dayStates: Map<string, DayState> = new Map();
+  private watchlist: string[];
+
+  constructor(context: StrategyContext, watchlist: string[]) {
+    super('EMACrossover', context);
+    this.watchlist = watchlist;
+  }
+
+  public async initialize(): Promise<void> {
+    await super.initialize();
+    const today = this.todayIST();
+    for (const symbol of this.watchlist) {
+      this.dayStates.set(symbol, {
+        tradesExecutedToday: 0,
+        lastResetDate: today,
+        lastCrossoverDirection: null,
+      });
+    }
+    logger.info('EMACrossoverStrategy initialized', { watchlist: this.watchlist.length });
+  }
+
+  public handleCandleUpdate(symbol: string, bundle: CandleBundle, ltp: number): void {
+    if (!this.isActive) return;
+
+    const position = this.context.positions.get(symbol);
+    if (position && position.quantity !== 0) return;
+
+    const state = this.getOrCreateState(symbol);
+    this.resetIfNewDay(state);
+    if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
+
+    const { fifteenMin, oneHour } = bundle;
+
+    // Need ≥ 22 candles to compute EMA21 with at least 2 output values for crossover
+    if (fifteenMin.length < 23) return;
+
+    const closes = fifteenMin.map((c: Candle) => c.close);
+    const ema9   = calculateEMA(closes, 9);
+    const ema21  = calculateEMA(closes, 21);
+
+    if (ema9.length < 2 || ema21.length < 2) return;
+
+    // Align tail indices: ema21 is shorter, so compare the last two values of each
+    const ema9Prev  = ema9[ema9.length - 2];
+    const ema9Last  = ema9[ema9.length - 1];
+    const ema21Prev = ema21[ema21.length - 2];
+    const ema21Last = ema21[ema21.length - 1];
+
+    const bullishCross = ema9Prev <= ema21Prev && ema9Last > ema21Last;
+    const bearishCross = ema9Prev >= ema21Prev && ema9Last < ema21Last;
+
+    if (!bullishCross && !bearishCross) {
+      // No new crossover — reset the directional lock so future crosses fire
+      state.lastCrossoverDirection = null;
+      return;
+    }
+
+    const crossDirection: 'BUY' | 'SELL' = bullishCross ? 'BUY' : 'SELL';
+
+    // Prevent re-firing the same crossover on the next refresh before it reverses
+    if (state.lastCrossoverDirection === crossDirection) return;
+
+    const trend    = get1HTrend(oneHour);
+    const atr      = calculateATR(fifteenMin.slice(0, -1), 14);
+    const volAvg   = avgVolume(fifteenMin, 20);
+    const volRatio = volAvg > 0 ? fifteenMin[fifteenMin.length - 1].volume / volAvg : 0;
+
+    if (!atr || atr === 0) return;
+
+    // Trend must be aligned
+    if (crossDirection === 'BUY'  && trend !== 'UP')   return;
+    if (crossDirection === 'SELL' && trend !== 'DOWN')  return;
+
+    // Volume must confirm (1.5× minimum)
+    if (volRatio < 1.5) {
+      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x)`);
+      return;
+    }
+
+    const ema9Slope = Math.abs((ema9Last - ema9Prev) / ema9Prev) * 100; // %
+    const confidence = this.scoreConfidence(crossDirection, trend, volRatio, ema9Slope);
+
+    state.lastCrossoverDirection = crossDirection;
+    this.emitCrossSignal(symbol, crossDirection, ltp || closes[closes.length - 1], atr, confidence, state);
+  }
+
+  // ---------------------------------------------------------------------------
+
+  private emitCrossSignal(
+    symbol: string,
+    action: 'BUY' | 'SELL',
+    price: number,
+    atr: number,
+    confidence: number,
+    state: DayState,
+  ): void {
+    const slDist = atr * 1.5;
+    const tpDist = atr * 3.0;
+
+    const sl     = action === 'BUY' ? price - slDist : price + slDist;
+    const target = action === 'BUY' ? price + tpDist : price - tpDist;
+
+    const signal: StrategySignal = {
+      symbol,
+      action,
+      stopLoss: sl,
+      target,
+      marginMultiplier: getSymbolMarginMultiplier(symbol),
+      useTrailingSL: true,
+      reason: `EMA9/21 ${action} cross | ATR=${atr.toFixed(2)} | SL=${sl.toFixed(2)} | TP=${target.toFixed(2)}`,
+      confidence,
+    };
+
+    state.tradesExecutedToday++;
+
+    logger.info(`[EMACrossover] ${action} signal`, {
+      symbol,
+      price: price.toFixed(2),
+      sl: sl.toFixed(2),
+      target: target.toFixed(2),
+      confidence: confidence.toFixed(2),
+      tradesUsed: `${state.tradesExecutedToday}/${this.MAX_TRADES_PER_STOCK_PER_DAY}`,
+    });
+    logger.audit('STRATEGY_SIGNAL', { strategy: this.name, signal });
+
+    this.emitSignal(signal);
+  }
+
+  private scoreConfidence(
+    action: 'BUY' | 'SELL',
+    trend: string,
+    volRatio: number,
+    ema9SlopePct: number,
+  ): number {
+    let score = 0.75;
+
+    if ((action === 'BUY' && trend === 'UP') || (action === 'SELL' && trend === 'DOWN')) {
+      score += 0.05;
+    }
+    if (volRatio >= 2.0)      score += 0.05;
+    if (ema9SlopePct >= 0.05) score += 0.05;
+
+    return Math.min(score, 0.90);
+  }
+
+  private getOrCreateState(symbol: string): DayState {
+    if (!this.dayStates.has(symbol)) {
+      this.dayStates.set(symbol, {
+        tradesExecutedToday: 0,
+        lastResetDate: this.todayIST(),
+        lastCrossoverDirection: null,
+      });
+    }
+    return this.dayStates.get(symbol)!;
+  }
+
+  private resetIfNewDay(state: DayState): void {
+    const today = this.todayIST();
+    if (state.lastResetDate !== today) {
+      state.tradesExecutedToday   = 0;
+      state.lastResetDate         = today;
+      state.lastCrossoverDirection = null;
+    }
+  }
+
+  private todayIST(): string {
+    return new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).split(',')[0].trim();
+  }
+
+  // IStrategy mandatory overrides (candle-driven — no action on tick)
+  public onMarketData(_data: MarketData): void {}
+  public onPositionUpdate(_position: Position): void {}
+}

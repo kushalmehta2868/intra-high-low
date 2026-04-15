@@ -561,6 +561,49 @@ export class AngelOneClient {
     }
   }
 
+  /**
+   * Fetch historical OHLCV candle data from Angel One.
+   * interval: ONE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | THIRTY_MINUTE | ONE_HOUR | ONE_DAY
+   * fromdate / todate: "YYYY-MM-DD HH:MM" in IST
+   */
+  public async getCandleData(
+    exchange: string,
+    symboltoken: string,
+    interval: string,
+    fromdate: string,
+    todate: string,
+  ): Promise<Array<[string, number, number, number, number, number]> | null> {
+    try {
+      const tokenValid = await this.ensureValidToken();
+      if (!tokenValid) {
+        logger.warn('Token validation failed before getCandleData', { symboltoken });
+        return null;
+      }
+
+      const response = await this.client.post(
+        '/rest/secure/angelbroking/historical/v1/getCandleData',
+        { exchange, symboltoken, interval, fromdate, todate },
+      );
+
+      if (response.data.status && Array.isArray(response.data.data)) {
+        return response.data.data as Array<[string, number, number, number, number, number]>;
+      }
+
+      logger.debug('getCandleData returned no data', {
+        symboltoken,
+        message: response.data.message,
+      });
+      return null;
+    } catch (error: any) {
+      logger.error('getCandleData error', {
+        symboltoken,
+        interval,
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
   public isAuthenticated(): boolean {
     return this.jwtToken !== null;
   }

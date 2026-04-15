@@ -31,6 +31,11 @@ import { DashboardDisplay } from "../services/dashboardDisplay";
 import { healthCheckServer } from "../utils/healthCheck";
 import { marginChecker } from "../services/marginChecker";
 import { circuitLimitDetector } from "../services/circuitLimitDetector";
+import { CandleDataService, ICandleDataProvider } from "../services/candleDataService";
+import { SignalArbiter } from "../services/signalArbiter";
+import { marketDataCache } from "../services/marketDataCache";
+import { EngulfingPatternStrategy } from "../strategies/engulfingPattern";
+import { EMACrossoverStrategy } from "../strategies/emaCrossover";
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -46,6 +51,10 @@ export class TradingEngine extends EventEmitter {
   private dashboardDisplay?: DashboardDisplay;
   private strategies: Map<string, IStrategy> = new Map();
   private isRunning: boolean = false;
+  private signalArbiter: SignalArbiter;
+  private candleDataService: CandleDataService | null = null;
+  /** Tracks which candle strategies have already had their handlers registered */
+  private candleHandlersRegistered: Set<string> = new Set();
   private initialBalance: number = 0;
   private watchlist: string[] = [];
   private symbolsToTrail: Set<string> = new Set(); // Track symbols that requested trailing SL
@@ -98,6 +107,12 @@ export class TradingEngine extends EventEmitter {
 
     // Initialize metrics tracker
     this.metricsTracker = new MetricsTracker(this.initialBalance);
+
+    // Signal arbiter: collects competing signals, forwards the best one
+    this.signalArbiter = new SignalArbiter(15_000);
+    this.signalArbiter.on('selected', async (signal: StrategySignal) => {
+      await this.handleStrategySignal(signal);
+    });
 
     this.setupEventHandlers();
   }
@@ -372,8 +387,10 @@ export class TradingEngine extends EventEmitter {
   }
 
   public addStrategy(strategy: IStrategy): void {
-    strategy.on("signal", async (signal: StrategySignal) => {
-      await this.handleStrategySignal(signal);
+    // Route every signal through the arbiter so the highest-confidence
+    // signal wins when multiple strategies fire on the same symbol.
+    strategy.on("signal", (signal: StrategySignal) => {
+      this.signalArbiter.submit(strategy.getName(), signal);
     });
 
     strategy.on("error", (error: Error) => {
@@ -980,9 +997,31 @@ export class TradingEngine extends EventEmitter {
       await strategy.initialize();
       logger.info("Strategy started", { name: strategy.getName() });
     }
+
+    // Start candle data service — register handlers only once per strategy
+    if (this.candleDataService) {
+      for (const strategy of this.strategies.values()) {
+        if ((strategy instanceof EngulfingPatternStrategy ||
+             strategy instanceof EMACrossoverStrategy) &&
+            !this.candleHandlersRegistered.has(strategy.getName())) {
+          const candleStrategy = strategy as EngulfingPatternStrategy | EMACrossoverStrategy;
+          this.candleDataService.onCandlesUpdated((symbol, bundle) => {
+            const ltp = marketDataCache.getLTP(symbol) ?? 0;
+            candleStrategy.handleCandleUpdate(symbol, bundle, ltp);
+          });
+          this.candleHandlersRegistered.add(strategy.getName());
+          logger.info(`Candle handler registered for ${strategy.getName()}`);
+        }
+      }
+      await this.candleDataService.start(this.watchlist);
+      logger.info('✅ CandleDataService started');
+    }
   }
 
   private async stopStrategies(): Promise<void> {
+    if (this.candleDataService) {
+      this.candleDataService.stop();
+    }
     for (const strategy of this.strategies.values()) {
       await strategy.shutdown();
       logger.info("Strategy stopped", { name: strategy.getName() });
@@ -1315,6 +1354,15 @@ export class TradingEngine extends EventEmitter {
       this.dashboardDisplay?.displayConsole();
     }, 300000); // 5 minutes
     logger.info("✅ Dashboard display started (every 5 min)");
+
+    // Initialise candle data service (used by Engulfing & EMA Crossover strategies)
+    const provider = this.broker as unknown as ICandleDataProvider;
+    if (typeof provider.getCandleData === 'function') {
+      this.candleDataService = new CandleDataService(provider);
+      logger.info('✅ CandleDataService initialised');
+    } else {
+      logger.warn('Broker does not support getCandleData — candle strategies will be inactive');
+    }
 
     this.isRunning = true;
 

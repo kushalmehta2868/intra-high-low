@@ -1,0 +1,197 @@
+import { BaseStrategy } from './base';
+import { StrategyContext, StrategySignal, MarketData, Position } from '../types';
+import { CandleBundle } from '../services/candleDataService';
+import { calculateATR, get1HTrend, avgVolume } from '../utils/indicators';
+import { getSymbolMarginMultiplier } from '../config/symbolConfig';
+import { logger } from '../utils/logger';
+
+interface DayState {
+  tradesExecutedToday: number;
+  lastResetDate: string;
+}
+
+/**
+ * EngulfingPatternStrategy
+ *
+ * Detects 15-min bullish / bearish engulfing candles with:
+ *   • 1H EMA(21) trend filter  (must be aligned to signal direction)
+ *   • Volume confirmation       (current candle > 1.5× 20-bar average)
+ *   • ATR(14)-based SL & TP    (SL = 1×ATR, TP = 2×ATR)
+ *
+ * Confidence scoring (base 0.75):
+ *   +0.05  trend aligned
+ *   +0.05  candle body ≥ 60% of candle range (strong engulf)
+ *   +0.05  volume ≥ 2× average
+ * Max: 0.90
+ *
+ * Called by CandleDataService via handleCandleUpdate() — NOT tick-based.
+ */
+export class EngulfingPatternStrategy extends BaseStrategy {
+  private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
+  private dayStates: Map<string, DayState> = new Map();
+  private watchlist: string[];
+
+  constructor(context: StrategyContext, watchlist: string[]) {
+    super('EngulfingPattern', context);
+    this.watchlist = watchlist;
+  }
+
+  public async initialize(): Promise<void> {
+    await super.initialize();
+    const today = this.todayIST();
+    for (const symbol of this.watchlist) {
+      this.dayStates.set(symbol, { tradesExecutedToday: 0, lastResetDate: today });
+    }
+    logger.info('EngulfingPatternStrategy initialized', { watchlist: this.watchlist.length });
+  }
+
+  /**
+   * Called by CandleDataService after every candle refresh.
+   * ltp: current live price from marketDataCache (used for logging / sizing).
+   */
+  public handleCandleUpdate(symbol: string, bundle: CandleBundle, ltp: number): void {
+    if (!this.isActive) return;
+
+    // Gate: must have an existing position-free slot
+    const position = this.context.positions.get(symbol);
+    if (position && position.quantity !== 0) return;
+
+    const state = this.getOrCreateState(symbol);
+    this.resetIfNewDay(state);
+    if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
+
+    const { fifteenMin, oneHour } = bundle;
+
+    // Need at least 2 completed candles for engulfing + enough for ATR(14)
+    if (fifteenMin.length < 16) return;
+
+    // The last element may be the still-forming candle — use the two completed ones
+    const prev = fifteenMin[fifteenMin.length - 2];
+    const curr = fifteenMin[fifteenMin.length - 1];
+
+    // Skip if any OHLC value is missing / zero
+    if (!prev || !curr) return;
+    if ([prev.open, prev.high, prev.low, prev.close,
+         curr.open, curr.high, curr.low, curr.close].some(v => !v || isNaN(v))) return;
+
+    const trend   = get1HTrend(oneHour);
+    const atr     = calculateATR(fifteenMin.slice(0, -1), 14); // exclude live candle
+    const volAvg  = avgVolume(fifteenMin, 20);
+    const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
+
+    if (!atr || atr === 0) return;
+
+    const isBullishEngulf =
+      curr.close > curr.open &&          // current is bullish
+      prev.close < prev.open &&          // previous was bearish
+      curr.open  < prev.close &&         // current opens below prev close
+      curr.close > prev.open;            // current closes above prev open
+
+    const isBearishEngulf =
+      curr.close < curr.open &&          // current is bearish
+      prev.close > prev.open &&          // previous was bullish
+      curr.open  > prev.close &&         // current opens above prev close
+      curr.close < prev.open;            // current closes below prev open
+
+    if (isBullishEngulf && trend === 'UP') {
+      const confidence = this.scoreConfidence(curr, trend, 'BUY', volRatio);
+      this.emitEngulfSignal(symbol, 'BUY', ltp || curr.close, atr, confidence, state);
+    } else if (isBearishEngulf && trend === 'DOWN') {
+      const confidence = this.scoreConfidence(curr, trend, 'SELL', volRatio);
+      this.emitEngulfSignal(symbol, 'SELL', ltp || curr.close, atr, confidence, state);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+
+  private emitEngulfSignal(
+    symbol: string,
+    action: 'BUY' | 'SELL',
+    price: number,
+    atr: number,
+    confidence: number,
+    state: DayState,
+  ): void {
+    const sl     = action === 'BUY' ? price - atr       : price + atr;
+    const target = action === 'BUY' ? price + atr * 2   : price - atr * 2;
+
+    const signal: StrategySignal = {
+      symbol,
+      action,
+      stopLoss: sl,
+      target,
+      marginMultiplier: getSymbolMarginMultiplier(symbol),
+      useTrailingSL: false,
+      reason: `Engulfing ${action} | ATR=${atr.toFixed(2)} | SL=${sl.toFixed(2)} | TP=${target.toFixed(2)}`,
+      confidence,
+    };
+
+    state.tradesExecutedToday++;
+
+    logger.info(`[EngulfingPattern] ${action} signal`, {
+      symbol,
+      price: price.toFixed(2),
+      sl: sl.toFixed(2),
+      target: target.toFixed(2),
+      confidence: confidence.toFixed(2),
+      tradesUsed: `${state.tradesExecutedToday}/${this.MAX_TRADES_PER_STOCK_PER_DAY}`,
+    });
+    logger.audit('STRATEGY_SIGNAL', { strategy: this.name, signal });
+
+    this.emitSignal(signal);
+  }
+
+  /**
+   * Confidence scoring: base 0.75, max 0.90.
+   */
+  private scoreConfidence(
+    candle: { open: number; high: number; low: number; close: number; volume: number },
+    trend: string,
+    action: 'BUY' | 'SELL',
+    volRatio: number,
+  ): number {
+    let score = 0.75;
+
+    // Trend alignment bonus
+    if ((action === 'BUY' && trend === 'UP') || (action === 'SELL' && trend === 'DOWN')) {
+      score += 0.05;
+    }
+
+    // Strong engulfing body (≥ 60% of full range)
+    const body  = Math.abs(candle.close - candle.open);
+    const range = candle.high - candle.low;
+    if (range > 0 && body / range >= 0.6) {
+      score += 0.05;
+    }
+
+    // Volume surge
+    if (volRatio >= 2.0) {
+      score += 0.05;
+    }
+
+    return Math.min(score, 0.90);
+  }
+
+  private getOrCreateState(symbol: string): DayState {
+    if (!this.dayStates.has(symbol)) {
+      this.dayStates.set(symbol, { tradesExecutedToday: 0, lastResetDate: this.todayIST() });
+    }
+    return this.dayStates.get(symbol)!;
+  }
+
+  private resetIfNewDay(state: DayState): void {
+    const today = this.todayIST();
+    if (state.lastResetDate !== today) {
+      state.tradesExecutedToday = 0;
+      state.lastResetDate = today;
+    }
+  }
+
+  private todayIST(): string {
+    return new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).split(',')[0].trim();
+  }
+
+  // IStrategy mandatory overrides (not tick-based — do nothing on tick)
+  public onMarketData(_data: MarketData): void {}
+  public onPositionUpdate(_position: Position): void {}
+}

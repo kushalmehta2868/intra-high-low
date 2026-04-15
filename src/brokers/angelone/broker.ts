@@ -425,6 +425,20 @@ export class AngelOneBroker extends BaseBroker {
     };
   }
 
+  /**
+   * Fetch historical OHLCV candles via AngelOneClient.
+   * Used by CandleDataService for technical analysis strategies.
+   */
+  public async getCandleData(
+    exchange: string,
+    symboltoken: string,
+    interval: string,
+    fromdate: string,
+    todate: string,
+  ): Promise<Array<[string, number, number, number, number, number]> | null> {
+    return this.client.getCandleData(exchange, symboltoken, interval, fromdate, todate);
+  }
+
   public async getAccountBalance(): Promise<number> {
     if (!this.isConnected) {
       logger.error("Broker not connected");
