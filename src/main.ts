@@ -55,7 +55,7 @@ async function main() {
 
     const engine = new TradingEngine(config, watchlist);
 
-    const initialBalance = 1000000;
+    const initialBalance = 50000;
     const marginMultiplier = config.trading.riskLimits.marginMultiplier;
 
     const strategyContext = {
