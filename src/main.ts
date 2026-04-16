@@ -91,9 +91,8 @@ async function main() {
       'ETERNAL-EQ',
     ];
 
-    const engine = new TradingEngine(config, watchlist);
-
     const initialBalance = 50000;
+    const engine = new TradingEngine(config, watchlist, initialBalance);
     const marginMultiplier = config.trading.riskLimits.marginMultiplier;
 
     const strategyContext = {

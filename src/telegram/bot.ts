@@ -103,22 +103,24 @@ ${message}
     message += `*Price:* ₹${price.toFixed(2)}\n`;
     message += `*Order Value:* ₹${orderValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
 
-    if (stopLoss) {
+    // Use explicit undefined checks so a stopLoss/target of 0 (invalid but possible) is still shown
+    if (stopLoss !== undefined && stopLoss > 0) {
       const slDiff = Math.abs(price - stopLoss);
-      const slPercent = ((slDiff / price) * 100).toFixed(2);
+      const slPercent = price > 0 ? ((slDiff / price) * 100).toFixed(2) : '0.00';
       message += `\n*Stop Loss:* ₹${stopLoss.toFixed(2)} (${slPercent}% risk)\n`;
     }
 
-    if (target) {
+    if (target !== undefined && target > 0) {
       const targetDiff = Math.abs(target - price);
-      const targetPercent = ((targetDiff / price) * 100).toFixed(2);
+      const targetPercent = price > 0 ? ((targetDiff / price) * 100).toFixed(2) : '0.00';
       message += `*Target:* ₹${target.toFixed(2)} (${targetPercent}% gain)\n`;
     }
 
-    if (stopLoss && target) {
+    if (stopLoss !== undefined && stopLoss > 0 && target !== undefined && target > 0) {
       const riskAmount = Math.abs(price - stopLoss) * quantity;
       const rewardAmount = Math.abs(target - price) * quantity;
-      const riskRewardRatio = (rewardAmount / riskAmount).toFixed(2);
+      // Guard against division by zero (stopLoss === price edge case)
+      const riskRewardRatio = riskAmount > 0 ? (rewardAmount / riskAmount).toFixed(2) : 'N/A';
       message += `\n*Risk:Reward* = 1:${riskRewardRatio}\n`;
       message += `*Max Risk:* ₹${riskAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
       message += `*Max Reward:* ₹${rewardAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
@@ -170,13 +172,13 @@ ${message}
 
     if (status === 'CLOSED' && additionalInfo) {
       message += `\n`;
-      if (additionalInfo.quantity) {
+      if (additionalInfo.quantity !== undefined && additionalInfo.quantity > 0) {
         message += `*Quantity:* ${additionalInfo.quantity}\n`;
       }
-      if (additionalInfo.entryPrice) {
+      if (additionalInfo.entryPrice !== undefined && additionalInfo.entryPrice > 0) {
         message += `*Entry Price:* ₹${additionalInfo.entryPrice.toFixed(2)}\n`;
       }
-      if (additionalInfo.exitPrice) {
+      if (additionalInfo.exitPrice !== undefined && additionalInfo.exitPrice > 0) {
         message += `*Exit Price:* ₹${additionalInfo.exitPrice.toFixed(2)}\n`;
       }
       message += `\n${emoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
@@ -237,10 +239,10 @@ ${message}
       message += `   *Current:* ₹${pos.currentPrice.toFixed(2)}\n`;
       message += `   *P&L:* ₹${pos.pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pos.pnlPercent >= 0 ? '+' : ''}${pos.pnlPercent.toFixed(2)}%)\n`;
 
-      if (pos.stopLoss) {
+      if (pos.stopLoss !== undefined && pos.stopLoss > 0) {
         message += `   *SL:* ₹${pos.stopLoss.toFixed(2)}\n`;
       }
-      if (pos.target) {
+      if (pos.target !== undefined && pos.target > 0) {
         message += `   *Target:* ₹${pos.target.toFixed(2)}\n`;
       }
 
@@ -297,7 +299,9 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
   }): Promise<void> {
     const emoji = data.dailyPnL >= 0 ? '📈' : '📉';
     const pnlEmoji = data.dailyPnL >= 0 ? '✅' : '❌';
-    const returnPercent = ((data.dailyPnL / data.startingBalance) * 100).toFixed(2);
+    const returnPercent = data.startingBalance > 0
+      ? ((data.dailyPnL / data.startingBalance) * 100).toFixed(2)
+      : '0.00';
 
     let message = `📊 *DAILY TRADING SUMMARY*\n`;
     message += `━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -331,11 +335,14 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
       message += `────────────────────────\n`;
 
       for (const trade of data.trades) {
-        const symbol = trade.symbol.replace('-EQ', '').padEnd(9);
-        const side = trade.side.padEnd(4);
-        const pnl = (trade.netPnL >= 0 ? '+' : '') + trade.netPnL.toFixed(0);
+        const symbol = (trade.symbol || '').replace('-EQ', '').padEnd(9);
+        const side = (trade.side || '').padEnd(4);
+        // TradeMetrics field is `pnl`, not `netPnL`
+        const tradePnL: number = trade.pnl ?? 0;
+        const tradePnLPct: number = trade.pnlPercent ?? 0;
+        const pnl = (tradePnL >= 0 ? '+' : '') + tradePnL.toFixed(0);
         const pnlFormatted = pnl.padStart(8);
-        const percent = (trade.pnlPercent >= 0 ? '+' : '') + trade.pnlPercent.toFixed(1) + '%';
+        const percent = (tradePnLPct >= 0 ? '+' : '') + tradePnLPct.toFixed(1) + '%';
 
         message += `${symbol} ${side} ${pnlFormatted} ${percent}\n`;
       }

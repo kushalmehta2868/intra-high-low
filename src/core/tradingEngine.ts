@@ -79,13 +79,14 @@ export class TradingEngine extends EventEmitter {
   private reconnectionInterval?: NodeJS.Timeout;
   private readonly RECONNECTION_INTERVAL_MS = 60 * 1000; // Try reconnecting every 1 minute
 
-  constructor(config: AppConfig, watchlist?: string[]) {
+  constructor(config: AppConfig, watchlist?: string[], initialCapital?: number) {
     super();
     this.config = config;
     this.watchlist = watchlist || [];
 
+    // Set initialBalance before initializeBroker() so PaperBroker gets the right value
+    this.initialBalance = initialCapital ?? 1000000;
     this.broker = this.initializeBroker();
-    this.initialBalance = 1000000;
     this.riskManager = new RiskManager(
       config.trading.riskLimits,
       this.initialBalance,
@@ -123,7 +124,7 @@ export class TradingEngine extends EventEmitter {
       logger.info("Initializing PAPER trading mode with REAL data");
       // Paper mode uses real Angel One data but sends Telegram signals instead of orders
       return new PaperBroker(
-        1000000, // Initial balance
+        this.initialBalance, // Initial balance — matches what was passed to engine
         this.config.broker, // Angel One config for real data
         this.config.telegram, // Telegram config for signals
         this.watchlist, // Watchlist for market data fetching
@@ -1469,11 +1470,24 @@ export class TradingEngine extends EventEmitter {
       );
     }
 
+    const rl = this.config.trading.riskLimits;
+    const effectiveBP = this.initialBalance * rl.marginMultiplier;
+    const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
     await this.telegramBot.sendMessage(
-      `🚀 *Trading Engine Started*\n\nMode: ${this.config.trading.mode}\nBalance: ₹${this.initialBalance.toFixed(2)}\n\n` +
-        (this.scheduler.isMarketHours()
-          ? "🟢 Market is OPEN - trading active"
-          : "🔴 Market is CLOSED - waiting for market open"),
+      `🚀 *Trading Engine Started*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `*Mode:* \`${this.config.trading.mode}\`\n` +
+      `*Balance:* ${fmt(this.initialBalance)}\n` +
+      `*Margin:* ${rl.marginMultiplier}x → ${fmt(effectiveBP)} buying power\n\n` +
+      `*Strategies:* ${this.strategies.size}\n` +
+      `*Watchlist:* ${this.watchlist.length} symbols\n\n` +
+      `*Max Risk/Trade:* ${rl.maxRiskPerTradePercent}%\n` +
+      `*Max Daily Loss:* ${rl.maxDailyLossPercent}%\n` +
+      `*Max Trades/Day:* ${rl.maxTradesPerDay}\n\n` +
+      (this.scheduler.isMarketHours()
+        ? "🟢 Market is OPEN — trading active"
+        : "🔴 Market is CLOSED — waiting for market open")
     );
 
     logger.info("Trading engine started successfully");
