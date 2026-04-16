@@ -83,17 +83,20 @@ export class SymbolTokenService {
       this.symbolTokenCache.clear();
       let equityCount = 0;
 
-      // Process master data
+      // Process master data.
+      // In Angel One's ScripMaster the symbol field already carries the exchange suffix
+      // (e.g. "HINDALCO-EQ") and instrumenttype is "" for equities — NOT "EQ".
+      // We identify equity rows by checking that the symbol ends with "-EQ".
       for (const item of response.data) {
-        // Only process NSE equity symbols
-        if (item.exch_seg === 'NSE' && item.instrumenttype === 'EQ') {
-          const symbol = `${item.symbol}-EQ`;
-          const token = item.token;
-
-          if (symbol && token) {
-            this.symbolTokenCache.set(symbol, token);
-            equityCount++;
-          }
+        if (
+          item.exch_seg === 'NSE' &&
+          item.symbol &&
+          typeof item.symbol === 'string' &&
+          item.symbol.endsWith('-EQ') &&
+          item.token
+        ) {
+          this.symbolTokenCache.set(item.symbol, item.token);
+          equityCount++;
         }
       }
 
