@@ -7,7 +7,7 @@ import {
 } from "../types";
 import { logger } from "../utils/logger";
 import { getSymbolMarginMultiplier } from "../config/symbolConfig";
-import { avgVolume, calculateATR, get30MinTrend } from "../utils/indicators";
+import { avgVolume, calculateATR, calculateRSI, get30MinTrend } from "../utils/indicators";
 import { CandleBundle } from "../services/candleDataService";
 import { strategyStateStore } from "../services/strategyStateStore";
 
@@ -52,6 +52,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private cachedVolumeRatios: Map<string, number> = new Map();
   private cachedATRs: Map<string, number> = new Map();
   private cachedTrends: Map<string, 'UP' | 'DOWN' | 'NEUTRAL'> = new Map();
+  private cachedRSIs: Map<string, number> = new Map();
   private readonly LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes in milliseconds
   private readonly COOLDOWN_PERIOD_MS = 10 * 60 * 1000; // 10 minutes cooldown after position close
 
@@ -398,11 +399,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       return;
     }
 
-    // SHOULD FIX #8 — Gap-up / gap-down guard: skip breakout signals in first 5 minutes.
-    // Gap opens create false breakouts where open price == day high/low.
+    // Time window guard:
+    //   Before 09:45 — range is too narrow after gap open; false breakouts are common.
+    //   After  15:00 — not enough session time left to reach target.
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentTime = `${String(istNow.getHours()).padStart(2, '0')}:${String(istNow.getMinutes()).padStart(2, '0')}`;
-    if (currentTime < '09:20') {
+    if (currentTime < '09:45' || currentTime >= '15:00') {
       return;
     }
 
@@ -417,6 +419,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const ltp = data.ltp;
     const prevLtp = state.prevLtp;
     const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
+    const rsi   = this.cachedRSIs.get(data.symbol);
 
     const crossedAboveHigh = prevLtp <= dayHigh && ltp > dayHigh;
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
@@ -432,6 +435,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
         logger.info(`🚫 [${data.symbol}] BUY signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        return;
+      }
+
+      // RSI gate: avoid buying when already overbought
+      if (rsi !== undefined && rsi >= 70) {
+        logger.info(`🚫 [${data.symbol}] BUY breakout rejected — RSI overbought (${rsi.toFixed(1)})`);
         return;
       }
 
@@ -457,6 +466,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
         logger.info(`🚫 [${data.symbol}] SELL signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        return;
+      }
+
+      // RSI gate: avoid selling when already oversold
+      if (rsi !== undefined && rsi <= 30) {
+        logger.info(`🚫 [${data.symbol}] SELL breakout rejected — RSI oversold (${rsi.toFixed(1)})`);
         return;
       }
 
@@ -597,6 +612,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       if (atr) this.cachedATRs.set(symbol, atr);
     }
 
+    // RSI(14) from 5-min closes — exclude the live candle
+    if (fiveMin.length >= 16) {
+      const closes = fiveMin.slice(0, -1).map(c => c.close);
+      const rsi = calculateRSI(closes, 14);
+      if (rsi !== null) this.cachedRSIs.set(symbol, rsi);
+    }
+
     // 30-min trend direction for the breakout gate
     this.cachedTrends.set(symbol, get30MinTrend(thirtyMin));
   }
@@ -689,6 +711,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     this.cachedVolumeRatios.clear();
     this.cachedATRs.clear();
     this.cachedTrends.clear();
+    this.cachedRSIs.clear();
 
     logger.info("Daily data reset for all symbols");
     logger.audit("STRATEGY_DAILY_RESET", { strategy: this.name });

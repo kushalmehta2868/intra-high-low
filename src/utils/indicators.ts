@@ -22,7 +22,9 @@ export function calculateEMA(closes: number[], period: number): number[] {
 }
 
 /**
- * Calculate ATR(period) for candles (oldest-first).
+ * Calculate ATR(period) for candles (oldest-first) using Wilder's smoothing.
+ * Seeds with the simple mean of the first `period` true ranges, then applies
+ * Wilder's EMA: ATR = (prevATR * (period-1) + currentTR) / period.
  * Returns null if there is insufficient data.
  */
 export function calculateATR(candles: Candle[], period: number): number | null {
@@ -35,8 +37,46 @@ export function calculateATR(candles: Candle[], period: number): number | null {
     trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
   }
 
-  const lastN = trs.slice(-period);
-  return lastN.reduce((a, b) => a + b, 0) / lastN.length;
+  // Seed: simple mean of first `period` true ranges
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  // Wilder's smoothing for remaining true ranges
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+
+  return atr;
+}
+
+/**
+ * Calculate RSI(period) for an array of closes (oldest-first) using Wilder's smoothing.
+ * Seeds with the simple mean of gains/losses over the first `period` changes,
+ * then applies Wilder's EMA for subsequent values.
+ * Returns null if there is insufficient data.
+ */
+export function calculateRSI(closes: number[], period: number = 14): number | null {
+  if (closes.length < period + 1) return null;
+
+  // Seed: simple mean of first `period` up/down moves
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) avgGain += change;
+    else avgLoss += Math.abs(change);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+
+  // Wilder's smoothing for remaining closes
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + (change > 0 ? change : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (change < 0 ? Math.abs(change) : 0)) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
 /**

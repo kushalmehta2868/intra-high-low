@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateATR, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateATR, calculateRSI, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -60,14 +60,17 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     this.resetIfNewDay(state);
     if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
 
+    // No new entries after 15:00 IST — not enough time to reach target
+    if (this.isAfterMarketCutoff()) return;
+
     const { tenMin, thirtyMin } = bundle;
 
-    // Need at least 2 completed candles for engulfing + enough for ATR(14)
-    if (tenMin.length < 16) return;
+    // Need: 1 live candle + 2 confirmed for engulfing + 20 for volume avg = 23 minimum
+    if (tenMin.length < 23) return;
 
-    // The last element may be the still-forming candle — use the two completed ones
-    const prev = tenMin[tenMin.length - 2];
-    const curr = tenMin[tenMin.length - 1];
+    // Use only confirmed (closed) candles: length-1 is live, length-2 is last confirmed
+    const prev = tenMin[tenMin.length - 3]; // second-to-last confirmed
+    const curr = tenMin[tenMin.length - 2]; // last confirmed candle
 
     // Skip if any OHLC value is missing / zero
     if (!prev || !curr) return;
@@ -76,7 +79,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
 
     const trend   = get30MinTrend(thirtyMin);
     const atr     = calculateATR(tenMin.slice(0, -1), 14); // exclude live candle
-    const volAvg  = avgVolume(tenMin, 20);
+    // Compare last confirmed candle's volume against the 20 candles that preceded it
+    const volAvg  = avgVolume(tenMin.slice(0, -1), 20);
     const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
 
     if (!atr || atr === 0) return;
@@ -93,10 +97,22 @@ export class EngulfingPatternStrategy extends BaseStrategy {
       curr.open  > prev.close &&         // current opens above prev close
       curr.close < prev.open;            // current closes below prev open
 
+    // RSI gate: avoid buying overbought (≥70) or selling oversold (≤30)
+    const closes = tenMin.slice(0, -1).map(c => c.close); // confirmed candles only
+    const rsi = calculateRSI(closes, 14);
+
     if (isBullishEngulf && trend === 'UP') {
+      if (rsi !== null && rsi >= 70) {
+        logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
+        return;
+      }
       const confidence = this.scoreConfidence(curr, trend, 'BUY', volRatio);
       this.emitEngulfSignal(symbol, 'BUY', ltp || curr.close, atr, confidence, state);
     } else if (isBearishEngulf && trend === 'DOWN') {
+      if (rsi !== null && rsi <= 30) {
+        logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
+        return;
+      }
       const confidence = this.scoreConfidence(curr, trend, 'SELL', volRatio);
       this.emitEngulfSignal(symbol, 'SELL', ltp || curr.close, atr, confidence, state);
     }
@@ -189,6 +205,12 @@ export class EngulfingPatternStrategy extends BaseStrategy {
 
   private todayIST(): string {
     return new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).split(',')[0].trim();
+  }
+
+  /** Returns true after 15:00 IST — no new entries in the last 30 min of the session. */
+  private isAfterMarketCutoff(): boolean {
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return istNow.getHours() >= 15;
   }
 
   // IStrategy mandatory overrides (not tick-based — do nothing on tick)

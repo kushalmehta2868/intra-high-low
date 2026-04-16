@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position, Candle } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateEMA, calculateATR, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateEMA, calculateATR, calculateRSI, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -61,6 +61,9 @@ export class EMACrossoverStrategy extends BaseStrategy {
     this.resetIfNewDay(state);
     if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
 
+    // No new entries after 15:00 IST — not enough time to reach target
+    if (this.isAfterMarketCutoff()) return;
+
     const { fiveMin, thirtyMin } = bundle;
 
     // Need ≥ 22 candles to compute EMA21 with at least 2 output values for crossover
@@ -107,6 +110,19 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if (volRatio < 1.5) {
       logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x)`);
       return;
+    }
+
+    // RSI gate: avoid buying overbought (≥70) or selling oversold (≤30)
+    const rsi = calculateRSI(closes, 14);
+    if (rsi !== null) {
+      if (crossDirection === 'BUY' && rsi >= 70) {
+        logger.info(`[EMACrossover] BUY cross on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
+        return;
+      }
+      if (crossDirection === 'SELL' && rsi <= 30) {
+        logger.info(`[EMACrossover] SELL cross on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
+        return;
+      }
     }
 
     const ema9Slope = Math.abs((ema9Last - ema9Prev) / ema9Prev) * 100; // %
@@ -197,6 +213,12 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
   private todayIST(): string {
     return new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).split(',')[0].trim();
+  }
+
+  /** Returns true after 15:00 IST — no new entries in the last 30 min of the session. */
+  private isAfterMarketCutoff(): boolean {
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return istNow.getHours() >= 15;
   }
 
   // IStrategy mandatory overrides (candle-driven — no action on tick)
