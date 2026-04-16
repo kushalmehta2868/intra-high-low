@@ -25,32 +25,70 @@ async function main() {
       marginMultiplier: config.trading.riskLimits.marginMultiplier
     });
 
-    // NIFTY 50 constituents only (Angel One NSE-EQ format)
+    // Complete NIFTY 50 constituents (Angel One NSE-EQ format)
     const watchlist = [
-      'RELIANCE-EQ',
-      'TCS-EQ',
-      'INFY-EQ',
+      // Banking & Finance
       'HDFCBANK-EQ',
       'ICICIBANK-EQ',
-      'BHARTIARTL-EQ',
-      'SBIN-EQ',
       'KOTAKBANK-EQ',
-      'WIPRO-EQ',
-      'HCLTECH-EQ',
-      'BAJFINANCE-EQ',
+      'SBIN-EQ',
       'AXISBANK-EQ',
-      'ASIANPAINT-EQ',
-      'MARUTI-EQ',
-      'ULTRACEMCO-EQ',
+      'INDUSINDBK-EQ',
+      'BAJFINANCE-EQ',
       'BAJAJFINSV-EQ',
-      'TITAN-EQ',
-      'HINDUNILVR-EQ',
-      'NTPC-EQ',
-      'SUNPHARMA-EQ',
-      'TATAMOTORS-EQ',
+      'SHRIRAMFIN-EQ',
+      // IT
+      'TCS-EQ',
+      'INFY-EQ',
+      'HCLTECH-EQ',
+      'WIPRO-EQ',
       'TECHM-EQ',
+      // Oil & Gas / Energy
+      'RELIANCE-EQ',
+      'ONGC-EQ',
+      'BPCL-EQ',
+      'NTPC-EQ',
+      'POWERGRID-EQ',
+      // Auto
+      'MARUTI-EQ',
+      'TMPV-EQ',
+      'BAJAJ-AUTO-EQ',
+      'EICHERMOT-EQ',
+      'HEROMOTOCO-EQ',
+      'M&M-EQ',
+      // Metals & Mining
+      'TATASTEEL-EQ',
+      'JSWSTEEL-EQ',
+      'HINDALCO-EQ',
+      'COALINDIA-EQ',
+      // Pharma
+      'SUNPHARMA-EQ',
+      'DRREDDY-EQ',
+      'CIPLA-EQ',
+      // Consumer / FMCG
+      'HINDUNILVR-EQ',
       'ITC-EQ',
+      'BRITANNIA-EQ',
+      'NESTLEIND-EQ',
+      'TATACONSUM-EQ',
+      // Cement & Building
+      'ULTRACEMCO-EQ',
+      'GRASIM-EQ',
+      // Telecom
+      'BHARTIARTL-EQ',
+      // Infra & Engineering
       'LT-EQ',
+      'ADANIPORTS-EQ',
+      'ADANIENT-EQ',
+      'BEL-EQ',
+      // Healthcare
+      'APOLLOHOSP-EQ',
+      // Consumer Discretionary
+      'ASIANPAINT-EQ',
+      'TITAN-EQ',
+      'TRENT-EQ',
+      // New Economy
+      'ETERNAL-EQ',
     ];
 
     const engine = new TradingEngine(config, watchlist);

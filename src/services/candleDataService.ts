@@ -118,17 +118,20 @@ export class CandleDataService {
 
     logger.info(`CandleDataService: refreshing ${only ?? 'all intervals'}`);
 
-    // Auth probe: try the first symbol before processing the whole watchlist.
-    // If the broker has no valid JWT, abort immediately instead of hammering
-    // the login endpoint once per symbol (which triggers the rate-limit cooldown).
+    // Auth probe: fetch FIVE_MINUTE data for the first symbol using the same parameters
+    // as the main loop. If auth is broken this aborts early before hammering the login
+    // endpoint for every symbol (which triggers the rate-limit cooldown).
+    // The probe result is reused for the first symbol so we don't make a duplicate call.
+    let probeCandles5: Candle[] | null = null;
     const probeToken = await symbolTokenService.getToken(this.watchlist[0]);
     if (probeToken) {
-      const probe = await this.provider.getCandleData('NSE', probeToken, 'FIVE_MINUTE',
-        this.daysAgoIST(1), this.nowIST());
-      if (probe === null) {
+      probeCandles5 = await this.fetch('NSE', probeToken, 'FIVE_MINUTE', 3);
+      if (probeCandles5 === null) {
         logger.warn('CandleDataService: auth probe failed — skipping refresh until next cycle');
         return;
       }
+      // Rate-limit gap after probe fetch before the main loop starts
+      await this.sleep(350);
     }
 
     for (const symbol of this.watchlist) {
@@ -140,20 +143,28 @@ export class CandleDataService {
         }
 
         const existing = this.cache.get(symbol) ?? { fiveMin: [], tenMin: [], thirtyMin: [] };
+        const isFirstSymbol = symbol === this.watchlist[0];
 
         if (!only || only === 'FIVE_MINUTE') {
-          const candles5 = await this.fetch('NSE', token, 'FIVE_MINUTE', 3);
+          // Reuse probe result for the first symbol to avoid a duplicate API call
+          const candles5 = (isFirstSymbol && probeCandles5 !== null)
+            ? probeCandles5
+            : await this.fetch('NSE', token, 'FIVE_MINUTE', 3);
           if (candles5) existing.fiveMin = candles5;
+          // Throttle after every fetch — keeps us well under Angel One's historical API limit
+          await this.sleep(350);
         }
 
         if (!only || only === 'TEN_MINUTE') {
           const candles10 = await this.fetch('NSE', token, 'TEN_MINUTE', 3);
           if (candles10) existing.tenMin = candles10;
+          await this.sleep(350);
         }
 
         if (!only || only === 'THIRTY_MINUTE') {
           const candles30 = await this.fetch('NSE', token, 'THIRTY_MINUTE', 7);
           if (candles30) existing.thirtyMin = candles30;
+          await this.sleep(350);
         }
 
         this.cache.set(symbol, existing);
@@ -166,9 +177,6 @@ export class CandleDataService {
             logger.error(`CandleDataService handler error for ${symbol}`, { error: err.message });
           }
         }
-
-        // Small delay between symbols to stay inside Angel One rate limits
-        await this.sleep(300);
       } catch (err: any) {
         logger.error(`CandleDataService: error refreshing ${symbol}`, { error: err.message });
       }
