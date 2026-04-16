@@ -62,6 +62,28 @@ export function get1HTrend(
 }
 
 /**
+ * Determine trend direction from EMA(period) slope on 30-min candles (oldest-first).
+ * Uses a small threshold (0.01%) to filter noise.
+ */
+export function get30MinTrend(
+  thirtyMinCandles: Candle[],
+  period: number = 21,
+): 'UP' | 'DOWN' | 'NEUTRAL' {
+  if (thirtyMinCandles.length < period + 1) return 'NEUTRAL';
+
+  const closes = thirtyMinCandles.map(c => c.close);
+  const emas = calculateEMA(closes, period);
+  if (emas.length < 2) return 'NEUTRAL';
+
+  const last = emas[emas.length - 1];
+  const prev = emas[emas.length - 2];
+
+  if (last > prev * 1.0001) return 'UP';
+  if (last < prev * 0.9999) return 'DOWN';
+  return 'NEUTRAL';
+}
+
+/**
  * Calculate average volume over the last `period` candles (oldest-first).
  * Excludes the current (last) candle from the average so we compare
  * the live candle against the historical baseline.

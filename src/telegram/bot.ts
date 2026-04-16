@@ -100,7 +100,7 @@ ${message}
     message += `🕐 *Time:* ${timeStr}\n`;
     message += `*Symbol:* \`${symbol}\`\n`;
     message += `*Quantity:* ${quantity}\n`;
-    message += `*Entry Price:* ₹${price.toFixed(2)}\n`;
+    message += `*Price:* ₹${price.toFixed(2)}\n`;
     message += `*Order Value:* ₹${orderValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
 
     if (stopLoss) {
@@ -304,7 +304,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
 
     // Performance Summary
     message += `${emoji} *Performance*\n`;
-    message += `${pnlEmoji} Net P&L: ₹${data.dailyPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${returnPercent >= '0' ? '+' : ''}${returnPercent}%)\n`;
+    message += `${pnlEmoji} Net P&L: ₹${data.dailyPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${data.dailyPnL >= 0 ? '+' : ''}${returnPercent}%)\n`;
     message += `💰 Starting: ₹${data.startingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
     message += `💵 Ending: ₹${data.endingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
 
@@ -318,7 +318,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
 
     if (data.totalTrades > 0) {
       message += `🏆 Largest Win: ₹${data.largestWin.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
-      message += `💔 Largest Loss: ₹${data.largestLoss.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+      message += `💔 Largest Loss: ₹${Math.abs(data.largestLoss).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
     }
 
     // Trade Details Table
@@ -333,7 +333,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
       for (const trade of data.trades) {
         const symbol = trade.symbol.replace('-EQ', '').padEnd(9);
         const side = trade.side.padEnd(4);
-        const pnl = (trade.pnl >= 0 ? '+' : '') + trade.pnl.toFixed(0);
+        const pnl = (trade.netPnL >= 0 ? '+' : '') + trade.netPnL.toFixed(0);
         const pnlFormatted = pnl.padStart(8);
         const percent = (trade.pnlPercent >= 0 ? '+' : '') + trade.pnlPercent.toFixed(1) + '%';
 

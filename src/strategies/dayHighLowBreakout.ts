@@ -7,7 +7,8 @@ import {
 } from "../types";
 import { logger } from "../utils/logger";
 import { getSymbolMarginMultiplier } from "../config/symbolConfig";
-import { volumeTracker } from "../services/volumeTracker";
+import { avgVolume, calculateATR, get30MinTrend } from "../utils/indicators";
+import { CandleBundle } from "../services/candleDataService";
 import { strategyStateStore } from "../services/strategyStateStore";
 
 interface PendingSignal {
@@ -48,6 +49,9 @@ interface SymbolState {
 export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private symbolStates: Map<string, SymbolState> = new Map();
   private watchlist: string[] = [];
+  private cachedVolumeRatios: Map<string, number> = new Map();
+  private cachedATRs: Map<string, number> = new Map();
+  private cachedTrends: Map<string, 'UP' | 'DOWN' | 'NEUTRAL'> = new Map();
   private readonly LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes in milliseconds
   private readonly COOLDOWN_PERIOD_MS = 10 * 60 * 1000; // 10 minutes cooldown after position close
 
@@ -127,11 +131,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     const state = this.symbolStates.get(data.symbol);
     if (!state) return;
-
-    // Update 5-min candle tracker with current tick cumulative volume
-    if (data.volume) {
-      volumeTracker.recordTick(data.symbol, data.volume, data.timestamp);
-    }
 
     // Check if it's a new trading day and reset accordingly
     this.checkAndResetForNewDay(state);
@@ -273,13 +272,15 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private checkPendingSignalConfirmation(symbol: string, ltp: number, state: SymbolState): void {
     const pending = state.pendingSignal!;
 
+    const atr = this.cachedATRs.get(symbol);
+
     if (pending.direction === 'BUY') {
       if (ltp > pending.breakoutLevel) {
         // Confirmed: price still above breakout level on second tick
         state.pendingSignal = null;
         state.tradesExecutedToday++;
         this.saveSymbolState(symbol, state);
-        this.on_buy_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp);
+        this.on_buy_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
       } else {
         // Reversed: cancel pending signal, reset flag so we can try again
         logger.info(`🔁 [${symbol}] BUY breakout not confirmed (price reversed) - resetting`, {
@@ -295,7 +296,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         state.pendingSignal = null;
         state.tradesExecutedToday++;
         this.saveSymbolState(symbol, state);
-        this.on_sell_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp);
+        this.on_sell_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
       } else {
         // Reversed: cancel pending signal, reset flag so we can try again
         logger.info(`🔁 [${symbol}] SELL breakout not confirmed (price reversed) - resetting`, {
@@ -333,10 +334,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         status = "❄️  Near Low Breakout!";
       }
 
-      // Get volume stats
-      const volumeStats = volumeTracker.getVolumeStats(data.symbol);
-      const volumeInfo = volumeStats
-        ? `${volumeStats.currentVolume.toLocaleString()} (${volumeStats.volumeRatio.toFixed(2)}x avg)`
+      // Get cached candle volume ratio
+      const volRatio = this.cachedVolumeRatios.get(data.symbol);
+      const volumeInfo = volRatio !== undefined
+        ? `${data.volume > 0 ? data.volume.toLocaleString() : "N/A"} (${volRatio.toFixed(2)}x avg)`
         : data.volume > 0
           ? data.volume.toLocaleString()
           : "N/A";
@@ -415,66 +416,57 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     const ltp = data.ltp;
     const prevLtp = state.prevLtp;
+    const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
 
     const crossedAboveHigh = prevLtp <= dayHigh && ltp > dayHigh;
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
-      // CRITICAL: Check 5-min candle volume surge before generating signal
-      if (!volumeTracker.hasFiveMinVolumeSurge(data.symbol)) {
-        logger.info(
-          `🚫 BUY signal rejected - insufficient 5-min candle volume`,
-          {
-            symbol: data.symbol,
-            currentCandleVolume: volumeTracker
-              .getCurrentCandleVolume(data.symbol)
-              .toLocaleString(),
-            avgFiveMinVolume: volumeTracker
-              .getAvgFiveMinVolume(data.symbol)
-              .toFixed(0),
-            required: "2.0x",
-            completedCandles: volumeTracker.getCompletedCandleCount(data.symbol),
-          },
-        );
+      // Trend filter: 30-min trend must be UP for a BUY breakout
+      if (trend !== 'UP') {
+        logger.info(`🚫 [${data.symbol}] BUY breakout rejected - 30-min trend is ${trend}`);
         return;
       }
 
-      // SHOULD FIX #7 — 2-tick confirmation: set pending signal, emit on next tick if confirmed
+      // Check 5-min candle volume: current candle must be > 1.5× 20-bar average
+      const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
+      if (volRatio < 1.5) {
+        logger.info(`🚫 [${data.symbol}] BUY signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        return;
+      }
+
+      // 2-tick confirmation: set pending signal, emit on next tick if confirmed
       state.hasBrokenHighToday = true;
       state.pendingSignal = { direction: 'BUY', breakoutLevel: dayHigh };
       logger.info(`⏳ [${data.symbol}] BUY breakout detected - awaiting 1-tick confirmation`, {
         dayHigh: `₹${dayHigh.toFixed(2)}`,
         ltp: `₹${ltp.toFixed(2)}`,
+        volumeRatio: `${volRatio.toFixed(2)}x`,
       });
       return;
     }
 
     if (crossedBelowLow && !state.hasBrokenLowToday) {
-      // CRITICAL: Check 5-min candle volume surge before generating signal
-      if (!volumeTracker.hasFiveMinVolumeSurge(data.symbol)) {
-        logger.info(
-          `🚫 SELL signal rejected - insufficient 5-min candle volume`,
-          {
-            symbol: data.symbol,
-            currentCandleVolume: volumeTracker
-              .getCurrentCandleVolume(data.symbol)
-              .toLocaleString(),
-            avgFiveMinVolume: volumeTracker
-              .getAvgFiveMinVolume(data.symbol)
-              .toFixed(0),
-            required: "2.0x",
-            completedCandles: volumeTracker.getCompletedCandleCount(data.symbol),
-          },
-        );
+      // Trend filter: 30-min trend must be DOWN for a SELL breakout
+      if (trend !== 'DOWN') {
+        logger.info(`🚫 [${data.symbol}] SELL breakout rejected - 30-min trend is ${trend}`);
         return;
       }
 
-      // SHOULD FIX #7 — 2-tick confirmation
+      // Check 5-min candle volume: current candle must be > 1.5× 20-bar average
+      const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
+      if (volRatio < 1.5) {
+        logger.info(`🚫 [${data.symbol}] SELL signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        return;
+      }
+
+      // 2-tick confirmation
       state.hasBrokenLowToday = true;
       state.pendingSignal = { direction: 'SELL', breakoutLevel: dayLow };
       logger.info(`⏳ [${data.symbol}] SELL breakout detected - awaiting 1-tick confirmation`, {
         dayLow: `₹${dayLow.toFixed(2)}`,
         ltp: `₹${ltp.toFixed(2)}`,
+        volumeRatio: `${volRatio.toFixed(2)}x`,
       });
       return;
     }
@@ -488,10 +480,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     ltp: number,
     dayHigh: number,
     prevLtp: number,
+    atr?: number,
   ): void {
-    // Stop Loss: 0.25% below entry  |  Target: 0.5% above entry  (1:2 R:R)
-    const stopLoss = ltp * (1 - 0.0025); // 0.25% below
-    const target = ltp * (1 + 0.005);   // 0.5% above
+    // ATR-based SL/TP (1×ATR SL, 2×ATR target → 1:2 R:R)
+    // Falls back to 0.25% / 0.5% fixed if ATR is not yet cached
+    const stopLoss = atr ? ltp - atr       : ltp * (1 - 0.0025);
+    const target   = atr ? ltp + atr * 2   : ltp * (1 + 0.005);
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -503,7 +497,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       target,
       marginMultiplier,
       useTrailingSL: true, // Enable trailing SL for this strategy
-      reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)})`,
+      reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
       confidence: 0.8, // Increased confidence due to filters
     };
 
@@ -516,9 +510,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       prevLtp: `₹${prevLtp.toFixed(2)}`,
       dayHigh: `₹${dayHigh.toFixed(2)}`,
       currentLtp: `₹${ltp.toFixed(2)}`,
-      crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) <= dayHigh (${dayHigh.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) > dayHigh`,
-      stopLoss: `₹${stopLoss.toFixed(2)} (0.25% below)`,
-      target: `₹${target.toFixed(2)} (0.5% above)`,
+      atr: atr ? `₹${atr.toFixed(2)}` : 'N/A (using fixed %)',
+      stopLoss: `₹${stopLoss.toFixed(2)}`,
+      target: `₹${target.toFixed(2)}`,
       riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
@@ -538,10 +532,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     ltp: number,
     dayLow: number,
     prevLtp: number,
+    atr?: number,
   ): void {
-    // Stop Loss: 0.25% above entry  |  Target: 0.5% below entry  (1:2 R:R)
-    const stopLoss = ltp * (1 + 0.0025); // 0.25% above
-    const target = ltp * (1 - 0.005);   // 0.5% below
+    // ATR-based SL/TP (1×ATR SL, 2×ATR target → 1:2 R:R)
+    // Falls back to 0.25% / 0.5% fixed if ATR is not yet cached
+    const stopLoss = atr ? ltp + atr       : ltp * (1 + 0.0025);
+    const target   = atr ? ltp - atr * 2   : ltp * (1 - 0.005);
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -553,7 +549,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       target,
       marginMultiplier,
       useTrailingSL: true, // Enable trailing SL for this strategy
-      reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)})`,
+      reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
       confidence: 0.8, // Increased confidence due to filters
     };
 
@@ -566,9 +562,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       prevLtp: `₹${prevLtp.toFixed(2)}`,
       dayLow: `₹${dayLow.toFixed(2)}`,
       currentLtp: `₹${ltp.toFixed(2)}`,
-      crossConfirmation: `prevLtp (${prevLtp.toFixed(2)}) >= dayLow (${dayLow.toFixed(2)}) AND ltp (${ltp.toFixed(2)}) < dayLow`,
-      stopLoss: `₹${stopLoss.toFixed(2)} (0.25% above)`,
-      target: `₹${target.toFixed(2)} (0.5% below)`,
+      atr: atr ? `₹${atr.toFixed(2)}` : 'N/A (using fixed %)',
+      stopLoss: `₹${stopLoss.toFixed(2)}`,
+      target: `₹${target.toFixed(2)}`,
       riskReward: `1:${riskRewardRatio.toFixed(2)}`,
     });
 
@@ -578,6 +574,31 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     });
 
     this.emitSignal(signal);
+  }
+
+  /**
+   * Called by CandleDataService after every 5-min candle refresh.
+   * Caches the volume ratio (current candle vs 20-bar average) for use
+   * in breakout signal filtering.
+   */
+  public handleCandleUpdate(symbol: string, bundle: CandleBundle, _ltp: number): void {
+    const { fiveMin, thirtyMin } = bundle;
+
+    // Volume ratio: current 5-min candle vs 20-bar average
+    if (fiveMin.length >= 21) {
+      const volAvg = avgVolume(fiveMin, 20);
+      const currentVol = fiveMin[fiveMin.length - 1].volume;
+      this.cachedVolumeRatios.set(symbol, volAvg > 0 ? currentVol / volAvg : 0);
+    }
+
+    // ATR(14) from 5-min candles — exclude the live (still-forming) candle
+    if (fiveMin.length >= 16) {
+      const atr = calculateATR(fiveMin.slice(0, -1), 14);
+      if (atr) this.cachedATRs.set(symbol, atr);
+    }
+
+    // 30-min trend direction for the breakout gate
+    this.cachedTrends.set(symbol, get30MinTrend(thirtyMin));
   }
 
   public onPositionUpdate(position: Position): void {
@@ -664,8 +685,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.lastResetDate = today;
     }
 
-    // Reset volume tracker for new day
-    volumeTracker.resetSessionVolume();
+    // Reset cached candle-derived values for the new day
+    this.cachedVolumeRatios.clear();
+    this.cachedATRs.clear();
+    this.cachedTrends.clear();
 
     logger.info("Daily data reset for all symbols");
     logger.audit("STRATEGY_DAILY_RESET", { strategy: this.name });

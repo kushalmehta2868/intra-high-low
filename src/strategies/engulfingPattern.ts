@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateATR, get1HTrend, avgVolume } from '../utils/indicators';
+import { calculateATR, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -13,10 +13,10 @@ interface DayState {
 /**
  * EngulfingPatternStrategy
  *
- * Detects 15-min bullish / bearish engulfing candles with:
- *   • 1H EMA(21) trend filter  (must be aligned to signal direction)
- *   • Volume confirmation       (current candle > 1.5× 20-bar average)
- *   • ATR(14)-based SL & TP    (SL = 1×ATR, TP = 2×ATR)
+ * Detects 10-min bullish / bearish engulfing candles with:
+ *   • 30-min EMA(21) trend filter  (must be aligned to signal direction)
+ *   • Volume confirmation           (current candle > 1.5× 20-bar average)
+ *   • ATR(14)-based SL & TP        (SL = 1×ATR, TP = 2×ATR)
  *
  * Confidence scoring (base 0.75):
  *   +0.05  trend aligned
@@ -60,23 +60,23 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     this.resetIfNewDay(state);
     if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
 
-    const { fifteenMin, oneHour } = bundle;
+    const { tenMin, thirtyMin } = bundle;
 
     // Need at least 2 completed candles for engulfing + enough for ATR(14)
-    if (fifteenMin.length < 16) return;
+    if (tenMin.length < 16) return;
 
     // The last element may be the still-forming candle — use the two completed ones
-    const prev = fifteenMin[fifteenMin.length - 2];
-    const curr = fifteenMin[fifteenMin.length - 1];
+    const prev = tenMin[tenMin.length - 2];
+    const curr = tenMin[tenMin.length - 1];
 
     // Skip if any OHLC value is missing / zero
     if (!prev || !curr) return;
     if ([prev.open, prev.high, prev.low, prev.close,
          curr.open, curr.high, curr.low, curr.close].some(v => !v || isNaN(v))) return;
 
-    const trend   = get1HTrend(oneHour);
-    const atr     = calculateATR(fifteenMin.slice(0, -1), 14); // exclude live candle
-    const volAvg  = avgVolume(fifteenMin, 20);
+    const trend   = get30MinTrend(thirtyMin);
+    const atr     = calculateATR(tenMin.slice(0, -1), 14); // exclude live candle
+    const volAvg  = avgVolume(tenMin, 20);
     const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
 
     if (!atr || atr === 0) return;

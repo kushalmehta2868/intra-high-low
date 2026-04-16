@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position, Candle } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateEMA, calculateATR, get1HTrend, avgVolume } from '../utils/indicators';
+import { calculateEMA, calculateATR, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -15,9 +15,9 @@ interface DayState {
 /**
  * EMACrossoverStrategy
  *
- * Detects EMA 9 / EMA 21 crossovers on 15-min candles with:
- *   • Volume confirmation  (current candle > 1.5× 20-bar average)
- *   • 1H EMA(21) trend filter
+ * Detects EMA 9 / EMA 21 crossovers on 5-min candles with:
+ *   • Volume confirmation      (current candle > 1.5× 20-bar average)
+ *   • 30-min EMA(21) trend filter
  *   • ATR(14)-based SL & TP  (SL = 1.5×ATR, TP = 3×ATR → 1:2 RR)
  *
  * Confidence scoring (base 0.75):
@@ -61,12 +61,12 @@ export class EMACrossoverStrategy extends BaseStrategy {
     this.resetIfNewDay(state);
     if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
 
-    const { fifteenMin, oneHour } = bundle;
+    const { fiveMin, thirtyMin } = bundle;
 
     // Need ≥ 22 candles to compute EMA21 with at least 2 output values for crossover
-    if (fifteenMin.length < 23) return;
+    if (fiveMin.length < 23) return;
 
-    const closes = fifteenMin.map((c: Candle) => c.close);
+    const closes = fiveMin.map((c: Candle) => c.close);
     const ema9   = calculateEMA(closes, 9);
     const ema21  = calculateEMA(closes, 21);
 
@@ -92,10 +92,10 @@ export class EMACrossoverStrategy extends BaseStrategy {
     // Prevent re-firing the same crossover on the next refresh before it reverses
     if (state.lastCrossoverDirection === crossDirection) return;
 
-    const trend    = get1HTrend(oneHour);
-    const atr      = calculateATR(fifteenMin.slice(0, -1), 14);
-    const volAvg   = avgVolume(fifteenMin, 20);
-    const volRatio = volAvg > 0 ? fifteenMin[fifteenMin.length - 1].volume / volAvg : 0;
+    const trend    = get30MinTrend(thirtyMin);
+    const atr      = calculateATR(fiveMin.slice(0, -1), 14);
+    const volAvg   = avgVolume(fiveMin, 20);
+    const volRatio = volAvg > 0 ? fiveMin[fiveMin.length - 1].volume / volAvg : 0;
 
     if (!atr || atr === 0) return;
 

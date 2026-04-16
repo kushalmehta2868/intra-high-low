@@ -36,6 +36,7 @@ import { SignalArbiter } from "../services/signalArbiter";
 import { marketDataCache } from "../services/marketDataCache";
 import { EngulfingPatternStrategy } from "../strategies/engulfingPattern";
 import { EMACrossoverStrategy } from "../strategies/emaCrossover";
+import { DayHighLowBreakoutStrategy } from "../strategies/dayHighLowBreakout";
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -988,6 +989,14 @@ export class TradingEngine extends EventEmitter {
   private async pauseForAfterHours(): Promise<void> {
     logger.info('⏹️ Pausing all API activity for after-hours');
 
+    // 0. Reset all intraday strategy state so nothing carries to the next day
+    for (const strategy of this.strategies.values()) {
+      if (strategy instanceof DayHighLowBreakoutStrategy) {
+        strategy.resetDailyData();
+      }
+    }
+    logger.info('✅ Strategy intraday state reset for EOD');
+
     // 1. Stop strategies and CandleDataService cron jobs
     await this.stopStrategies();
 
@@ -1032,31 +1041,39 @@ export class TradingEngine extends EventEmitter {
     }
     logger.info('✅ Broker reconnected');
 
-    // 2. Refresh symbol token cache for the new day
+    // 2. Refresh today's starting balance so daily summary return % is accurate
+    const todayBalance = await this.broker.getAccountBalance();
+    if (todayBalance > 0) {
+      this.initialBalance = todayBalance;
+      this.riskManager.resetStartingBalance(todayBalance);
+      logger.info(`📅 Starting balance refreshed for new day: ₹${todayBalance.toLocaleString()}`);
+    }
+
+    // 3. Refresh symbol token cache for the new day
     await this.positionManager.syncPositions();
 
-    // 3. Reset daily data (Paper mode)
+    // 4. Reset daily data (Paper mode)
     if (this.config.trading.mode === TradingMode.PAPER) {
       (this.broker as any).resetDailyData?.();
       logger.info('📅 Daily market data reset');
     }
 
-    // 4. Restart heartbeat monitor
+    // 5. Restart heartbeat monitor
     this.heartbeatMonitor.start();
 
-    // 5. Restart position reconciliation
+    // 6. Restart position reconciliation
     if (this.positionReconciliation) {
       this.positionReconciliation.start();
       logger.info('✅ Position reconciliation restarted');
     }
 
-    // 6. Restart stop-loss monitoring (REAL mode)
+    // 7. Restart stop-loss monitoring (REAL mode)
     if (this.config.trading.mode === TradingMode.REAL) {
       this.stopLossManager.startMonitoring();
       logger.info('✅ Stop-loss manager restarted');
     }
 
-    // 7. Start strategies + CandleDataService
+    // 8. Start strategies + CandleDataService
     await this.startStrategies();
 
     await this.telegramBot.sendMessage(
@@ -1074,9 +1091,10 @@ export class TradingEngine extends EventEmitter {
     if (this.candleDataService) {
       for (const strategy of this.strategies.values()) {
         if ((strategy instanceof EngulfingPatternStrategy ||
-             strategy instanceof EMACrossoverStrategy) &&
+             strategy instanceof EMACrossoverStrategy ||
+             strategy instanceof DayHighLowBreakoutStrategy) &&
             !this.candleHandlersRegistered.has(strategy.getName())) {
-          const candleStrategy = strategy as EngulfingPatternStrategy | EMACrossoverStrategy;
+          const candleStrategy = strategy as EngulfingPatternStrategy | EMACrossoverStrategy | DayHighLowBreakoutStrategy;
           this.candleDataService.onCandlesUpdated((symbol, bundle) => {
             const ltp = marketDataCache.getLTP(symbol) ?? 0;
             candleStrategy.handleCandleUpdate(symbol, bundle, ltp);

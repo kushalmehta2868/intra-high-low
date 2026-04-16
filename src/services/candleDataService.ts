@@ -17,8 +17,9 @@ export interface ICandleDataProvider {
 }
 
 export interface CandleBundle {
-  fifteenMin: Candle[];   // last ~50 × 15-min candles (oldest-first)
-  oneHour:    Candle[];   // last ~25 × 1H candles    (oldest-first)
+  fiveMin:   Candle[];   // last ~60 × 5-min candles  (oldest-first)
+  tenMin:    Candle[];   // last ~50 × 10-min candles (oldest-first)
+  thirtyMin: Candle[];   // last ~30 × 30-min candles (oldest-first)
 }
 
 export type CandleUpdateHandler = (symbol: string, bundle: CandleBundle) => void;
@@ -26,14 +27,14 @@ export type CandleUpdateHandler = (symbol: string, bundle: CandleBundle) => void
 /**
  * CandleDataService
  *
- * Fetches and caches 15-min and 1-H candles for every watchlist symbol
+ * Fetches and caches 5-min and 30-min candles for every watchlist symbol
  * using the Angel One historical data API.
  *
  * Refresh schedule (IST):
- *   • 15-min candles  – at :01, :16, :31, :46 past every hour
- *     (1 minute after each 15-min candle close, e.g. 9:31, 9:46, 10:01 …)
- *   • 1-H candles     – at :17 past every hour
- *     (2 minutes after each 1-H candle close)
+ *   • 5-min candles   – at :01,:06,:11,:16,:21,:26,:31,:36,:41,:46,:51,:56 past every hour
+ *     (1 minute after each 5-min candle close)
+ *   • 30-min candles  – at :01 and :31 past every hour
+ *     (1 minute after each 30-min candle close)
  *
  * Registered handlers are called after each successful refresh.
  */
@@ -62,19 +63,25 @@ export class CandleDataService {
     // Warm up the cache immediately so strategies have data from the first tick
     await this.refreshAll();
 
-    // 15-min refresh: 1 min after each 15-min candle close
-    const task15 = cron.schedule('1,16,31,46 * * * *', async () => {
+    // 5-min refresh: 1 min after each 5-min candle close
+    const task5 = cron.schedule('1,6,11,16,21,26,31,36,41,46,51,56 * * * *', async () => {
       if (!this.isInTradingHours()) return;
-      await this.refreshAll('FIFTEEN_MINUTE');
+      await this.refreshAll('FIVE_MINUTE');
     }, { timezone: 'Asia/Kolkata' });
 
-    // 1-H refresh: 2 min after each 1-H candle close
-    const task1h = cron.schedule('17 * * * *', async () => {
+    // 10-min refresh: 1 min after each 10-min candle close
+    const task10 = cron.schedule('1,11,21,31,41,51 * * * *', async () => {
       if (!this.isInTradingHours()) return;
-      await this.refreshAll('ONE_HOUR');
+      await this.refreshAll('TEN_MINUTE');
     }, { timezone: 'Asia/Kolkata' });
 
-    this.tasks.push(task15, task1h);
+    // 30-min refresh: 1 min after each 30-min candle close
+    const task30 = cron.schedule('1,31 * * * *', async () => {
+      if (!this.isInTradingHours()) return;
+      await this.refreshAll('THIRTY_MINUTE');
+    }, { timezone: 'Asia/Kolkata' });
+
+    this.tasks.push(task5, task10, task30);
     logger.info('CandleDataService started', { symbols: watchlist.length });
   }
 
@@ -106,10 +113,23 @@ export class CandleDataService {
    * Refresh candles for every symbol.
    * @param only  If provided, only refresh that interval; otherwise refresh both.
    */
-  private async refreshAll(only?: 'FIFTEEN_MINUTE' | 'ONE_HOUR'): Promise<void> {
+  private async refreshAll(only?: 'FIVE_MINUTE' | 'TEN_MINUTE' | 'THIRTY_MINUTE'): Promise<void> {
     if (!this.isRunning) return;
 
     logger.info(`CandleDataService: refreshing ${only ?? 'all intervals'}`);
+
+    // Auth probe: try the first symbol before processing the whole watchlist.
+    // If the broker has no valid JWT, abort immediately instead of hammering
+    // the login endpoint once per symbol (which triggers the rate-limit cooldown).
+    const probeToken = await symbolTokenService.getToken(this.watchlist[0]);
+    if (probeToken) {
+      const probe = await this.provider.getCandleData('NSE', probeToken, 'FIVE_MINUTE',
+        this.daysAgoIST(1), this.nowIST());
+      if (probe === null) {
+        logger.warn('CandleDataService: auth probe failed — skipping refresh until next cycle');
+        return;
+      }
+    }
 
     for (const symbol of this.watchlist) {
       try {
@@ -119,16 +139,21 @@ export class CandleDataService {
           continue;
         }
 
-        const existing = this.cache.get(symbol) ?? { fifteenMin: [], oneHour: [] };
+        const existing = this.cache.get(symbol) ?? { fiveMin: [], tenMin: [], thirtyMin: [] };
 
-        if (!only || only === 'FIFTEEN_MINUTE') {
-          const candles15 = await this.fetch('NSE', token, 'FIFTEEN_MINUTE', 7);
-          if (candles15) existing.fifteenMin = candles15;
+        if (!only || only === 'FIVE_MINUTE') {
+          const candles5 = await this.fetch('NSE', token, 'FIVE_MINUTE', 3);
+          if (candles5) existing.fiveMin = candles5;
         }
 
-        if (!only || only === 'ONE_HOUR') {
-          const candles1h = await this.fetch('NSE', token, 'ONE_HOUR', 35);
-          if (candles1h) existing.oneHour = candles1h;
+        if (!only || only === 'TEN_MINUTE') {
+          const candles10 = await this.fetch('NSE', token, 'TEN_MINUTE', 3);
+          if (candles10) existing.tenMin = candles10;
+        }
+
+        if (!only || only === 'THIRTY_MINUTE') {
+          const candles30 = await this.fetch('NSE', token, 'THIRTY_MINUTE', 7);
+          if (candles30) existing.thirtyMin = candles30;
         }
 
         this.cache.set(symbol, existing);
@@ -143,7 +168,7 @@ export class CandleDataService {
         }
 
         // Small delay between symbols to stay inside Angel One rate limits
-        await this.sleep(200);
+        await this.sleep(300);
       } catch (err: any) {
         logger.error(`CandleDataService: error refreshing ${symbol}`, { error: err.message });
       }
