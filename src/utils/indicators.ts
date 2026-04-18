@@ -133,3 +133,116 @@ export function avgVolume(candles: Candle[], period: number): number {
   const history = candles.slice(-(period + 1), -1);
   return history.reduce((s, c) => s + c.volume, 0) / period;
 }
+
+export interface MACDResult {
+  macdLine:   number[];
+  signalLine: number[];
+  histogram:  number[];
+}
+
+/**
+ * MACD(fast=12, slow=26, signal=9) over oldest-first closes.
+ * Returns null when fewer than slow + signal bars are available.
+ */
+export function calculateMACD(
+  closes: number[],
+  fastPeriod   = 12,
+  slowPeriod   = 26,
+  signalPeriod = 9,
+): MACDResult | null {
+  if (closes.length < slowPeriod + signalPeriod) return null;
+
+  const fastEMA = calculateEMA(closes, fastPeriod);
+  const slowEMA = calculateEMA(closes, slowPeriod);
+
+  const offset      = slowPeriod - fastPeriod;
+  const alignedFast = fastEMA.slice(offset);
+  if (alignedFast.length !== slowEMA.length) return null;
+
+  const macdFull = alignedFast.map((f, i) => f - slowEMA[i]);
+  const sigLine  = calculateEMA(macdFull, signalPeriod);
+  if (sigLine.length < 2) return null;
+
+  const trimmed   = macdFull.slice(macdFull.length - sigLine.length);
+  const histogram = trimmed.map((m, i) => m - sigLine[i]);
+
+  return { macdLine: trimmed, signalLine: sigLine, histogram };
+}
+
+/**
+ * ADX(period) — measures trend strength regardless of direction.
+ * ADX > 20 = trending; ADX < 20 = choppy/ranging.
+ * Uses Wilder's smoothing. Returns null when fewer than 2×period + 1 bars available.
+ */
+export function calculateADX(candles: Candle[], period: number): number | null {
+  if (candles.length < period * 2 + 1) return null;
+  const slice = candles.slice(-(period * 2 + 1));
+
+  const plusDMs:  number[] = [];
+  const minusDMs: number[] = [];
+  const trs:      number[] = [];
+
+  for (let i = 1; i < slice.length; i++) {
+    const c = slice[i], p = slice[i - 1];
+    const up   = c.high - p.high;
+    const down = p.low  - c.low;
+    plusDMs.push(up > down && up > 0 ? up : 0);
+    minusDMs.push(down > up && down > 0 ? down : 0);
+    trs.push(Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)));
+  }
+
+  let smPlus  = plusDMs.slice(0, period).reduce((a, b) => a + b, 0);
+  let smMinus = minusDMs.slice(0, period).reduce((a, b) => a + b, 0);
+  let smTR    = trs.slice(0, period).reduce((a, b) => a + b, 0);
+
+  const dxValues: number[] = [];
+  const pushDX = (sp: number, sm: number, st: number) => {
+    if (st === 0) return;
+    const pdi = 100 * sp / st, mdi = 100 * sm / st, sum = pdi + mdi;
+    if (sum > 0) dxValues.push(100 * Math.abs(pdi - mdi) / sum);
+  };
+  pushDX(smPlus, smMinus, smTR);
+
+  for (let i = period; i < trs.length; i++) {
+    smPlus  = smPlus  - smPlus  / period + plusDMs[i];
+    smMinus = smMinus - smMinus / period + minusDMs[i];
+    smTR    = smTR    - smTR    / period + trs[i];
+    pushDX(smPlus, smMinus, smTR);
+  }
+
+  if (dxValues.length < period) return null;
+
+  let adx = dxValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dxValues.length; i++) {
+    adx = (adx * (period - 1) + dxValues[i]) / period;
+  }
+  return adx;
+}
+
+/**
+ * Session VWAP — resets at 09:15 IST (NSE market open) each day.
+ * Returns null when no session candles are present.
+ */
+export function calculateSessionVWAP(candles: Candle[]): number | null {
+  // Compute today's 09:15 IST as a UTC Date:
+  // IST = UTC+5:30, so 09:15 IST = 03:45 UTC on the same IST calendar date.
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const nowIST      = new Date(Date.now() + istOffsetMs);
+  const sessionStart = new Date(Date.UTC(
+    nowIST.getUTCFullYear(),
+    nowIST.getUTCMonth(),
+    nowIST.getUTCDate(),
+    3, 45, 0,  // 03:45 UTC = 09:15 IST
+  ));
+
+  const session = candles.filter(c => c.timestamp >= sessionStart);
+  if (session.length === 0) return null;
+
+  let sumTPV = 0, sumV = 0;
+  for (const c of session) {
+    const tp  = (c.high + c.low + c.close) / 3;
+    sumTPV   += tp * c.volume;
+    sumV     += c.volume;
+  }
+  return sumV === 0 ? null : sumTPV / sumV;
+}

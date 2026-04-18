@@ -2,6 +2,7 @@ import { TradingEngine } from './core/tradingEngine';
 import { DayHighLowBreakoutStrategy } from './strategies/dayHighLowBreakout';
 import { EngulfingPatternStrategy } from './strategies/engulfingPattern';
 import { EMACrossoverStrategy } from './strategies/emaCrossover';
+import { ConfluenceStrategy } from './strategies/confluenceStrategy';
 import configManager from './config';
 import { logger } from './utils/logger';
 import { healthCheckServer } from './utils/healthCheck';
@@ -122,11 +123,16 @@ async function main() {
     const emaCrossoverStrategy = new EMACrossoverStrategy(strategyContext, watchlist);
     engine.addStrategy(emaCrossoverStrategy);
 
+    // Strategy 4: Confluence (RSI+MACD / Breakout+Retest / VWAP Pullback — ≥2/3 must agree)
+    const confluenceStrategy = new ConfluenceStrategy(strategyContext, watchlist);
+    engine.addStrategy(confluenceStrategy);
+
     logger.info('All strategies registered', {
       strategies: [
         strategy.getName(),
         engulfingStrategy.getName(),
         emaCrossoverStrategy.getName(),
+        confluenceStrategy.getName(),
       ],
       watchlist: watchlist.length,
       initialBalance,

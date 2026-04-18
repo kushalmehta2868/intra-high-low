@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position, Candle } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateEMA, calculateATR, calculateRSI, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateEMA, calculateATR, calculateRSI, calculateADX, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -101,6 +101,15 @@ export class EMACrossoverStrategy extends BaseStrategy {
     const volRatio = volAvg > 0 ? fiveMin[fiveMin.length - 1].volume / volAvg : 0;
 
     if (!atr || atr === 0) return;
+
+    // ADX regime filter: skip crossovers in choppy/ranging markets
+    if (fiveMin.length >= 29) {
+      const adx = calculateADX(fiveMin.slice(0, -1), 14);
+      if (adx !== null && adx < 20) {
+        logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adx.toFixed(1)}<20, choppy market`);
+        return;
+      }
+    }
 
     // Trend must be aligned
     if (crossDirection === 'BUY'  && trend !== 'UP')   return;

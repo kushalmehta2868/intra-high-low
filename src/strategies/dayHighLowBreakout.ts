@@ -7,7 +7,7 @@ import {
 } from "../types";
 import { logger } from "../utils/logger";
 import { getSymbolMarginMultiplier } from "../config/symbolConfig";
-import { avgVolume, calculateATR, calculateRSI, get30MinTrend } from "../utils/indicators";
+import { avgVolume, calculateATR, calculateRSI, calculateADX, get30MinTrend } from "../utils/indicators";
 import { CandleBundle } from "../services/candleDataService";
 import { strategyStateStore } from "../services/strategyStateStore";
 
@@ -53,6 +53,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   private cachedATRs: Map<string, number> = new Map();
   private cachedTrends: Map<string, 'UP' | 'DOWN' | 'NEUTRAL'> = new Map();
   private cachedRSIs: Map<string, number> = new Map();
+  private cachedADXs: Map<string, number> = new Map();
   private readonly LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes in milliseconds
   private readonly COOLDOWN_PERIOD_MS = 10 * 60 * 1000; // 10 minutes cooldown after position close
 
@@ -420,6 +421,13 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const prevLtp = state.prevLtp;
     const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
     const rsi   = this.cachedRSIs.get(data.symbol);
+    const adx   = this.cachedADXs.get(data.symbol);
+
+    // ADX regime filter: skip signals in choppy/ranging markets
+    if (adx !== undefined && adx < 20) {
+      logger.debug(`[DayHighLow] ${data.symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
+      return;
+    }
 
     const crossedAboveHigh = prevLtp <= dayHigh && ltp > dayHigh;
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
@@ -621,6 +629,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // 30-min trend direction for the breakout gate
     this.cachedTrends.set(symbol, get30MinTrend(thirtyMin));
+
+    // ADX(14) from 5-min candles — skip in choppy/ranging markets
+    if (fiveMin.length >= 29) {
+      const adx = calculateADX(fiveMin.slice(0, -1), 14);
+      if (adx !== null) this.cachedADXs.set(symbol, adx);
+    }
   }
 
   public onPositionUpdate(position: Position): void {
@@ -712,6 +726,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     this.cachedATRs.clear();
     this.cachedTrends.clear();
     this.cachedRSIs.clear();
+    this.cachedADXs.clear();
 
     logger.info("Daily data reset for all symbols");
     logger.audit("STRATEGY_DAILY_RESET", { strategy: this.name });

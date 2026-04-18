@@ -37,6 +37,7 @@ import { marketDataCache } from "../services/marketDataCache";
 import { EngulfingPatternStrategy } from "../strategies/engulfingPattern";
 import { EMACrossoverStrategy } from "../strategies/emaCrossover";
 import { DayHighLowBreakoutStrategy } from "../strategies/dayHighLowBreakout";
+import { ConfluenceStrategy } from "../strategies/confluenceStrategy";
 
 export class TradingEngine extends EventEmitter {
   private config: AppConfig;
@@ -634,23 +635,32 @@ export class TradingEngine extends EventEmitter {
           this.riskManager.updateBalance(currentBalance);
           this.metricsTracker.updateBalance(currentBalance);
 
-          // Calculate quantity: always use 5x margin multiplier
+          // Calculate quantity using fixed-risk formula:
+          //   riskQty  = (balance × riskPct%) / |entry - SL|   ← risk-per-trade
+          //   maxQty   = (balance × posSizePct% × 5× margin) / price  ← hard capital cap
+          //   quantity = min(riskQty, maxQty)
           let quantity = signal.quantity;
           if (!quantity) {
             const MARGIN_MULTIPLIER = 5;
-            const positionSizePct =
-              this.config.trading.riskLimits.positionSizePercent || 10;
-            const capitalForTrade =
-              (positionSizePct / 100) * currentBalance * MARGIN_MULTIPLIER;
-            quantity = Math.floor(capitalForTrade / currentPrice);
+            const riskPct      = this.config.trading.riskLimits.maxRiskPerTradePercent || 1;
+            const posSizePct   = this.config.trading.riskLimits.positionSizePercent || 10;
+            const slDist       = Math.abs(adjustedEntryPrice - stopLoss);
+            const riskAmount   = (riskPct / 100) * currentBalance;
+            const riskQty      = slDist > 0 ? Math.floor(riskAmount / slDist) : 0;
+            const maxCapital   = (posSizePct / 100) * currentBalance * MARGIN_MULTIPLIER;
+            const maxQty       = Math.floor(maxCapital / adjustedEntryPrice);
+            quantity           = Math.min(riskQty, maxQty);
 
-            logger.info("Quantity calculated", {
-              symbol: signal.symbol,
-              currentPrice: `₹${currentPrice.toFixed(2)}`,
-              currentBalance: `₹${currentBalance.toFixed(2)}`,
-              capitalForTrade: `₹${capitalForTrade.toFixed(2)}`,
-              finalQuantity: quantity,
-              orderValue: `₹${(quantity * currentPrice).toFixed(2)}`,
+            logger.info("Quantity calculated (risk-based)", {
+              symbol:     signal.symbol,
+              price:      `₹${adjustedEntryPrice.toFixed(2)}`,
+              balance:    `₹${currentBalance.toFixed(2)}`,
+              slDist:     `₹${slDist.toFixed(2)}`,
+              riskAmt:    `₹${riskAmount.toFixed(2)}`,
+              riskQty,
+              maxQty,
+              finalQty:   quantity,
+              orderValue: `₹${(quantity * adjustedEntryPrice).toFixed(2)}`,
             });
           }
 
@@ -704,6 +714,23 @@ export class TradingEngine extends EventEmitter {
               riskCheck.reason || "Risk check failed",
             );
             return;
+          }
+
+          // Enforce minimum 1:1.5 risk-reward before placing any order
+          if (signal.target) {
+            const slDist = Math.abs(adjustedEntryPrice - stopLoss);
+            const tpDist = Math.abs(signal.target - adjustedEntryPrice);
+            const rr     = slDist > 0 ? tpDist / slDist : 0;
+            if (rr < 1.5) {
+              logger.warn("Order rejected — R:R below minimum 1:1.5", {
+                symbol: signal.symbol,
+                rr:     rr.toFixed(2),
+                slDist: `₹${slDist.toFixed(2)}`,
+                tpDist: `₹${tpDist.toFixed(2)}`,
+              });
+              orderIdempotencyManager.markOrderFailed(orderKey, `R:R too low (${rr.toFixed(2)} < 1.5)`);
+              return;
+            }
           }
 
           // Register for trailing if requested
@@ -1093,9 +1120,10 @@ export class TradingEngine extends EventEmitter {
       for (const strategy of this.strategies.values()) {
         if ((strategy instanceof EngulfingPatternStrategy ||
              strategy instanceof EMACrossoverStrategy ||
-             strategy instanceof DayHighLowBreakoutStrategy) &&
+             strategy instanceof DayHighLowBreakoutStrategy ||
+             strategy instanceof ConfluenceStrategy) &&
             !this.candleHandlersRegistered.has(strategy.getName())) {
-          const candleStrategy = strategy as EngulfingPatternStrategy | EMACrossoverStrategy | DayHighLowBreakoutStrategy;
+          const candleStrategy = strategy as EngulfingPatternStrategy | EMACrossoverStrategy | DayHighLowBreakoutStrategy | ConfluenceStrategy;
           this.candleDataService.onCandlesUpdated((symbol, bundle) => {
             const ltp = marketDataCache.getLTP(symbol) ?? 0;
             candleStrategy.handleCandleUpdate(symbol, bundle, ltp);

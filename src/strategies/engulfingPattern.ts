@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateATR, calculateRSI, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateATR, calculateRSI, calculateADX, get30MinTrend, avgVolume } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -84,6 +84,15 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
 
     if (!atr || atr === 0) return;
+
+    // ADX regime filter: skip patterns in choppy/ranging markets
+    if (tenMin.length >= 29) {
+      const adx = calculateADX(tenMin.slice(0, -1), 14);
+      if (adx !== null && adx < 20) {
+        logger.debug(`[EngulfingPattern] ${symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
+        return;
+      }
+    }
 
     const isBullishEngulf =
       curr.close > curr.open &&          // current is bullish
