@@ -387,7 +387,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     const trendEmoji = (t: string) => t === 'UP' ? '🟢' : t === 'DOWN' ? '🔴' : '⚪';
     const filtersOk = (s: typeof snapshots[0]) =>
       s.trend !== 'NEUTRAL' &&
-      (s.adx === undefined || s.adx >= 20) &&
+      (s.adx === undefined || s.adx >= 15) &&
       (s.volRatio === undefined || s.volRatio >= 1.5);
 
     const readyCount = snapshots.filter(filtersOk).length;
@@ -417,7 +417,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
         const readyTag = filtersOk(s) ? ' ✅' : '';
 
         const adxStr = s.adx !== undefined
-          ? (s.adx >= 20 ? `${s.adx.toFixed(0)} ✅` : `${s.adx.toFixed(0)} (need +${(20 - s.adx).toFixed(0)})`)
+          ? (s.adx >= 15 ? `${s.adx.toFixed(0)} ✅` : `${s.adx.toFixed(0)} (need +${(15 - s.adx).toFixed(0)})`)
           : '--';
         const rsiStr = s.rsi !== undefined
           ? (s.rsi >= 30 && s.rsi <= 70 ? `${s.rsi.toFixed(0)} ✅` : s.rsi > 70 ? `${s.rsi.toFixed(0)} (OB, -${(s.rsi - 70).toFixed(0)})` : `${s.rsi.toFixed(0)} (OS, +${(30 - s.rsi).toFixed(0)})`)

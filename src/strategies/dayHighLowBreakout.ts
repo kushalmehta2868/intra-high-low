@@ -439,8 +439,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const adx   = this.cachedADXs.get(data.symbol);
 
     // ADX regime filter: skip signals in choppy/ranging markets
-    if (adx !== undefined && adx < 20) {
-      logger.info(`[${this.name}] 🚫 [${data.symbol}] Signal blocked — ADX=${adx.toFixed(1)}<20 (choppy market)`);
+    // Threshold 15 is appropriate for 5-min intraday (20 is calibrated for daily charts)
+    if (adx !== undefined && adx < 15) {
+      logger.info(`[${this.name}] 🚫 [${data.symbol}] Signal blocked — ADX=${adx.toFixed(1)}<15 (choppy market)`);
       return;
     }
 
@@ -616,11 +617,19 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   public handleCandleUpdate(symbol: string, bundle: CandleBundle, _ltp: number): void {
     const { fiveMin, thirtyMin } = bundle;
 
-    // Volume ratio: current 5-min candle vs 20-bar average
-    if (fiveMin.length >= 21) {
-      const volAvg = avgVolume(fiveMin, 20);
-      const currentVol = fiveMin[fiveMin.length - 1].volume;
-      this.cachedVolumeRatios.set(symbol, volAvg > 0 ? currentVol / volAvg : 0);
+    // Volume ratio: most recently CLOSED 5-min candle vs 10-bar average.
+    // fiveMin[last] is the still-forming candle (fetched 1 min after close),
+    // so we use fiveMin[-2] as the closed reference candle and average the
+    // 10 bars before it. 10 bars (50 min) stays within the same session,
+    // avoiding contamination from previous days' volume profiles.
+    if (fiveMin.length >= 12) {
+      const closedCandles = fiveMin.slice(0, -1);           // exclude live candle
+      const refCandle     = closedCandles[closedCandles.length - 1]; // just-closed
+      const history       = closedCandles.slice(-11, -1);   // 10 bars before it
+      const volAvg        = history.length > 0
+        ? history.reduce((s, c) => s + c.volume, 0) / history.length
+        : 0;
+      this.cachedVolumeRatios.set(symbol, volAvg > 0 ? refCandle.volume / volAvg : 0);
     }
 
     // ATR(14) from 5-min candles — exclude the live (still-forming) candle
@@ -639,9 +648,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // 30-min trend direction for the breakout gate
     this.cachedTrends.set(symbol, get30MinTrend(thirtyMin));
 
-    // ADX(14) from 5-min candles — skip in choppy/ranging markets
-    if (fiveMin.length >= 29) {
-      const adx = calculateADX(fiveMin.slice(0, -1), 14);
+    // ADX(7) from 5-min candles — period 7 gives ~20 min lag vs 50 min for period 14,
+    // which is appropriate for intraday breakouts on 5-min charts.
+    if (fiveMin.length >= 15) {
+      const adx = calculateADX(fiveMin.slice(0, -1), 7);
       if (adx !== null) this.cachedADXs.set(symbol, adx);
     }
   }

@@ -288,12 +288,26 @@ export class WebSocketDataFeed extends EventEmitter {
       const low = data.readBigInt64LE(107) / 100n; // Bytes 107-115
       const close = data.readBigInt64LE(115) / 100n; // Bytes 115-123
 
-      // Extract volume (bytes 27-35, 8-byte integer)
-      // Volume is typically cumulative for the day
+      // SNAP_QUOTE binary layout (Angel One SmartStream):
+      //   0      subscription_mode (1)
+      //   1      exchange_type (1)
+      //   2-26   token (25, null-terminated)
+      //   27-34  sequence_number (8) ← NOT volume
+      //   35-42  exchange_timestamp (8)
+      //   43-50  last_traded_price (8, paise)
+      //   51-58  last_traded_qty (8)
+      //   59-66  avg_traded_price (8, paise)
+      //   67-74  volume_trade_for_the_day (8)  ← correct offset
+      //   75-82  total_buy_qty (8)
+      //   83-90  total_sell_qty (8)
+      //   91-98  open (8, paise)
+      //   99-106 high (8, paise)
+      //   107-114 low (8, paise)
+      //   115-122 close (8, paise)
       let volume = 0;
-      if (data.length >= 35) {
+      if (data.length >= 75) {
         try {
-          volume = Number(data.readBigInt64LE(27));
+          volume = Number(data.readBigInt64LE(67));
         } catch (e) {
           logger.debug('Could not read volume from binary data');
         }
