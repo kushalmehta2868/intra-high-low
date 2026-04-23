@@ -84,11 +84,11 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
     // Use closed candles only: last element is still-forming, second-to-last is last confirmed
     const closedCandles = fiveMin.slice(0, -1);
-    const closes = fiveMin.map((c: Candle) => c.close);
     const closedCloses = closedCandles.map((c: Candle) => c.close);
 
-    const ema9   = calculateEMA(closes, 9);
-    const ema21  = calculateEMA(closes, 21);
+    // EMAs must use only closed candles — live candle is partial and skews the values
+    const ema9   = calculateEMA(closedCloses, 9);
+    const ema21  = calculateEMA(closedCloses, 21);
 
     if (ema9.length < 2 || ema21.length < 2) return;
 
@@ -102,13 +102,15 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
     const trend    = get30MinTrend(thirtyMin);
     const atr      = calculateATR(closedCandles, 14);
-    // Volume: compare last closed candle vs 10-bar history of closed candles
+    // Volume: compare last closed candle vs 10-bar history
+    // avgVolume(arr, 10) internally takes arr.slice(-11, -1), so pass closedCandles directly
     const lastClosed = closedCandles[closedCandles.length - 1];
-    const volAvg     = avgVolume(closedCandles.slice(-11, -1), 10);
+    const volAvg     = avgVolume(closedCandles, 10);
     const volRatio   = volAvg > 0 ? lastClosed.volume / volAvg : 0;
 
     let adxValue: number | undefined;
-    if (fiveMin.length >= 29) {
+    if (fiveMin.length >= 30) {
+      // Need closedCandles.length >= 29 = period*2+1 for ADX(14)
       const adx = calculateADX(closedCandles, 14);
       if (adx !== null) adxValue = adx;
     }
@@ -172,7 +174,7 @@ export class EMACrossoverStrategy extends BaseStrategy {
     const confidence = this.scoreConfidence(crossDirection, trend, volRatio, ema9Slope);
 
     state.lastCrossoverDirection = crossDirection;
-    this.emitCrossSignal(symbol, crossDirection, ltp || closes[closes.length - 1], atr, confidence, state);
+    this.emitCrossSignal(symbol, crossDirection, ltp || closedCloses[closedCloses.length - 1], atr, confidence, state);
   }
 
   // ---------------------------------------------------------------------------

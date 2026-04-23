@@ -269,12 +269,14 @@ export class ConfluenceStrategy extends BaseStrategy {
     if (this.isAfterMarketCutoff()) return;
 
     const candles = bundle.fiveMin;
-    if (candles.length < 40) return;
+    if (candles.length < 41) return; // need 40 closed + 1 live
 
-    const price = ltp || candles[candles.length - 1].close;
+    // Use only closed candles — last element is still-forming
+    const closedCandles = candles.slice(0, -1);
+    const price = ltp || closedCandles[closedCandles.length - 1].close;
 
-    // ADX regime filter: skip choppy markets
-    const adx = calculateADX(candles, 14);
+    // ADX regime filter: skip choppy markets (closed candles, period*2+1 = 29 needed)
+    const adx = calculateADX(closedCandles, 14);
     const adxValue = adx !== null ? adx : undefined;
     if (adx !== null && adx < 20) {
       logger.debug(`[Confluence] ${symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
@@ -285,11 +287,11 @@ export class ConfluenceStrategy extends BaseStrategy {
       return;
     }
 
-    // Run all 3 sub-strategies
+    // Run all 3 sub-strategies on closed candles only
     const votes: Vote[] = [
-      s1_rsiMacdScalp(candles, price),
-      s2_breakoutRetest(candles, price),
-      s3_vwapPullback(candles, price),
+      s1_rsiMacdScalp(closedCandles, price),
+      s2_breakoutRetest(closedCandles, price),
+      s3_vwapPullback(closedCandles, price),
     ];
 
     logger.debug(`[Confluence] ${symbol} votes`, {
@@ -319,7 +321,7 @@ export class ConfluenceStrategy extends BaseStrategy {
     const slDistances = agreeing.map(v => v.slDist).filter((x): x is number => x !== null);
     const tpDistances = agreeing.map(v => v.tpDist).filter((x): x is number => x !== null);
 
-    const atr    = calculateATR(candles, 14) ?? price * 0.005;
+    const atr    = calculateATR(closedCandles, 14) ?? price * 0.005;
     const avgSl  = slDistances.length ? slDistances.reduce((a, b) => a + b, 0) / slDistances.length : atr;
     const avgTp  = tpDistances.length ? tpDistances.reduce((a, b) => a + b, 0) / tpDistances.length : avgSl * 2;
 

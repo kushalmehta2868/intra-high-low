@@ -93,7 +93,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
 
     let adxValue: number | undefined;
-    if (tenMin.length >= 29) {
+    if (tenMin.length >= 30) {
+      // Need slice(0,-1).length >= 29 = period*2+1 for ADX(14)
       const adx = calculateADX(tenMin.slice(0, -1), 14);
       if (adx !== null) adxValue = adx;
     }
