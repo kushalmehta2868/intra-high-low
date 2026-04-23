@@ -282,6 +282,10 @@ export class ConfluenceStrategy extends BaseStrategy {
         symbol, adx: adxValue, s1: 'NEUTRAL', s2: 'NEUTRAL', s3: 'NEUTRAL',
         buyVotes: 0, sellVotes: 0, tradesExecutedToday: state.tradesExecutedToday,
       });
+      // Emit for both BUY and SELL since we don't know direction — emit as a generic block
+      this.emitRejectedSignal({ symbol, action: 'BUY', pattern: 'Confluence (3-sub)',
+        blockedBy: `ADX too low (${adx.toFixed(1)} < 20, choppy)`,
+        details: { adx: adx.toFixed(1) } });
       return;
     }
 
@@ -309,7 +313,19 @@ export class ConfluenceStrategy extends BaseStrategy {
     const hasLong  = buyVotes.length  >= 2;
     const hasShort = sellVotes.length >= 2;
 
-    if (!hasLong && !hasShort) return;
+    if (!hasLong && !hasShort) {
+      // Near-miss: emit rejected signal if 1 vote exists
+      if (buyVotes.length === 1) {
+        this.emitRejectedSignal({ symbol, action: 'BUY', pattern: 'Confluence (3-sub)',
+          blockedBy: 'Only 1/3 sub-strategies agree (need ≥2)',
+          details: { s1: votes[0].direction, s2: votes[1].direction, s3: votes[2].direction, adx: adx !== null ? adx.toFixed(1) : 'N/A' } });
+      } else if (sellVotes.length === 1) {
+        this.emitRejectedSignal({ symbol, action: 'SELL', pattern: 'Confluence (3-sub)',
+          blockedBy: 'Only 1/3 sub-strategies agree (need ≥2)',
+          details: { s1: votes[0].direction, s2: votes[1].direction, s3: votes[2].direction, adx: adx !== null ? adx.toFixed(1) : 'N/A' } });
+      }
+      return;
+    }
 
     const agreeing   = hasLong ? buyVotes : sellVotes;
     const action     = (hasLong ? 'BUY' : 'SELL') as 'BUY' | 'SELL';

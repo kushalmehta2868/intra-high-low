@@ -139,19 +139,37 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
     if (!atr || atr === 0) return;
 
+    const baseDetails = {
+      ema9: ema9Last.toFixed(2), ema21: ema21Last.toFixed(2),
+      trend, adx: adxValue?.toFixed(1) ?? 'N/A',
+      vol: volRatio !== undefined ? `${volRatio.toFixed(2)}x` : 'N/A',
+    };
+
     // ADX regime filter: skip crossovers in choppy/ranging markets
     if (adxValue !== undefined && adxValue < 20) {
       logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adxValue.toFixed(1)}<20, choppy market`);
+      this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+        blockedBy: `ADX too low (${adxValue.toFixed(1)} < 20, choppy)`, details: baseDetails });
       return;
     }
 
     // Trend must be aligned
-    if (crossDirection === 'BUY'  && trend !== 'UP')   return;
-    if (crossDirection === 'SELL' && trend !== 'DOWN')  return;
+    if (crossDirection === 'BUY' && trend !== 'UP') {
+      this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+        blockedBy: `Trend=${trend} (need UP)`, details: baseDetails });
+      return;
+    }
+    if (crossDirection === 'SELL' && trend !== 'DOWN') {
+      this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+        blockedBy: `Trend=${trend} (need DOWN)`, details: baseDetails });
+      return;
+    }
 
-    // Volume must confirm (1.5× minimum)
+    // Volume must confirm (1.3× minimum)
     if (volRatio > 0 && volRatio < 1.3) {
       logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x < 1.3x)`);
+      this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+        blockedBy: `Volume too low (${volRatio.toFixed(2)}x < 1.3x)`, details: baseDetails });
       return;
     }
 
@@ -160,10 +178,14 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if (rsi !== null) {
       if (crossDirection === 'BUY' && rsi >= 70) {
         logger.info(`[EMACrossover] BUY cross on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
+        this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+          blockedBy: `RSI overbought (${rsi.toFixed(1)} ≥ 70)`, details: { ...baseDetails, rsi: rsi.toFixed(1) } });
         return;
       }
       if (crossDirection === 'SELL' && rsi <= 30) {
         logger.info(`[EMACrossover] SELL cross on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
+        this.emitRejectedSignal({ symbol, action: crossDirection, pattern: 'EMA 9/21 Crossover',
+          blockedBy: `RSI oversold (${rsi.toFixed(1)} ≤ 30)`, details: { ...baseDetails, rsi: rsi.toFixed(1) } });
         return;
       }
     }

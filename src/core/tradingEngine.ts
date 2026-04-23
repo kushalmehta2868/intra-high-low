@@ -5,7 +5,7 @@ import { PaperBroker } from "../brokers/paper/broker";
 import { RiskManager } from "../risk/riskManager";
 import { PositionManager } from "./positionManager";
 import { MarketScheduler } from "./scheduler";
-import { IStrategy } from "../strategies/base";
+import { IStrategy, RejectedSignal } from "../strategies/base";
 import { TradingTelegramBot } from "../telegram/bot";
 import {
   AppConfig,
@@ -397,6 +397,12 @@ export class TradingEngine extends EventEmitter {
         .catch((err) =>
           logger.error("Failed to send strategy error alert", err),
         );
+    });
+
+    strategy.on("rejected_signal", (signal: RejectedSignal) => {
+      this.telegramBot
+        .sendMissedSignal(signal)
+        .catch((err) => logger.error("Failed to send missed signal notification", err));
     });
 
     this.strategies.set(strategy.getName(), strategy);

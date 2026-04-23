@@ -630,6 +630,36 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     }
   }
 
+  public async sendMissedSignal(data: {
+    symbol: string;
+    strategy: string;
+    action: 'BUY' | 'SELL';
+    pattern: string;
+    blockedBy: string;
+    details: Record<string, string | number>;
+  }): Promise<void> {
+    const actionEmoji = data.action === 'BUY' ? '🟢' : '🔴';
+    const timeStr = new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+
+    let msg = `⚠️ *MISSED SIGNAL* — ${data.strategy}\n`;
+    msg += `🕐 ${timeStr} IST\n`;
+    msg += `${'─'.repeat(28)}\n`;
+    msg += `${actionEmoji} *${data.action}* on \`${data.symbol.replace('-EQ', '')}\`\n`;
+    msg += `📌 Pattern: ${data.pattern}\n`;
+    msg += `🚫 Blocked by: *${data.blockedBy}*\n`;
+
+    if (Object.keys(data.details).length > 0) {
+      msg += `${'─'.repeat(28)}\n`;
+      for (const [k, v] of Object.entries(data.details)) {
+        msg += `• ${k}: ${v}\n`;
+      }
+    }
+
+    await this.sendMessage(msg);
+  }
+
   public async start(): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not configured, skipping startup');
