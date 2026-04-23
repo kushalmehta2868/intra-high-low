@@ -27,6 +27,17 @@ interface DayState {
   lastResetDate: string;
 }
 
+export interface ConfluenceSnapshot {
+  symbol: string;
+  adx: number | undefined;
+  s1: 'BUY' | 'SELL' | 'NEUTRAL';
+  s2: 'BUY' | 'SELL' | 'NEUTRAL';
+  s3: 'BUY' | 'SELL' | 'NEUTRAL';
+  buyVotes: number;
+  sellVotes: number;
+  tradesExecutedToday: number;
+}
+
 // ─── Sub-strategies (ported from crypto-bot, adapted for NSE 5-min candles) ──
 
 /**
@@ -229,6 +240,7 @@ export class ConfluenceStrategy extends BaseStrategy {
   private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
   private dayStates: Map<string, DayState> = new Map();
   private watchlist: string[];
+  private snapshots: Map<string, ConfluenceSnapshot> = new Map();
 
   constructor(context: StrategyContext, watchlist: string[]) {
     super('Confluence', context);
@@ -263,8 +275,13 @@ export class ConfluenceStrategy extends BaseStrategy {
 
     // ADX regime filter: skip choppy markets
     const adx = calculateADX(candles, 14);
+    const adxValue = adx !== null ? adx : undefined;
     if (adx !== null && adx < 20) {
       logger.debug(`[Confluence] ${symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
+      this.snapshots.set(symbol, {
+        symbol, adx: adxValue, s1: 'NEUTRAL', s2: 'NEUTRAL', s3: 'NEUTRAL',
+        buyVotes: 0, sellVotes: 0, tradesExecutedToday: state.tradesExecutedToday,
+      });
       return;
     }
 
@@ -281,6 +298,13 @@ export class ConfluenceStrategy extends BaseStrategy {
 
     const buyVotes  = votes.filter(v => v.direction === 'BUY');
     const sellVotes = votes.filter(v => v.direction === 'SELL');
+
+    this.snapshots.set(symbol, {
+      symbol, adx: adxValue,
+      s1: votes[0].direction, s2: votes[1].direction, s3: votes[2].direction,
+      buyVotes: buyVotes.length, sellVotes: sellVotes.length,
+      tradesExecutedToday: state.tradesExecutedToday,
+    });
 
     const hasLong  = buyVotes.length  >= 2;
     const hasShort = sellVotes.length >= 2;
@@ -356,6 +380,10 @@ export class ConfluenceStrategy extends BaseStrategy {
   private isAfterMarketCutoff(): boolean {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     return istNow.getHours() >= 15;
+  }
+
+  public getSnapshot(): ConfluenceSnapshot[] {
+    return Array.from(this.snapshots.values());
   }
 
   // IStrategy mandatory overrides (candle-driven — no action on tick)

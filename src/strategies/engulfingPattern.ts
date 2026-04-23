@@ -10,6 +10,15 @@ interface DayState {
   lastResetDate: string;
 }
 
+export interface EngulfingSnapshot {
+  symbol: string;
+  trend: string;
+  adx: number | undefined;
+  volRatio: number | undefined;
+  lastPattern: 'BULLISH' | 'BEARISH' | 'NONE';
+  tradesExecutedToday: number;
+}
+
 /**
  * EngulfingPatternStrategy
  *
@@ -30,6 +39,7 @@ export class EngulfingPatternStrategy extends BaseStrategy {
   private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
   private dayStates: Map<string, DayState> = new Map();
   private watchlist: string[];
+  private snapshots: Map<string, EngulfingSnapshot> = new Map();
 
   constructor(context: StrategyContext, watchlist: string[]) {
     super('EngulfingPattern', context);
@@ -77,21 +87,24 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     if ([prev.open, prev.high, prev.low, prev.close,
          curr.open, curr.high, curr.low, curr.close].some(v => !v || isNaN(v))) return;
 
-    const trend   = get30MinTrend(thirtyMin);
-    const atr     = calculateATR(tenMin.slice(0, -1), 14); // exclude live candle
-    // Compare last confirmed candle's volume against the 20 candles that preceded it
-    const volAvg  = avgVolume(tenMin.slice(0, -1), 20);
+    const trend    = get30MinTrend(thirtyMin);
+    const atr      = calculateATR(tenMin.slice(0, -1), 14);
+    const volAvg   = avgVolume(tenMin.slice(0, -1), 20);
     const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
+
+    let adxValue: number | undefined;
+    if (tenMin.length >= 29) {
+      const adx = calculateADX(tenMin.slice(0, -1), 14);
+      if (adx !== null) adxValue = adx;
+    }
 
     if (!atr || atr === 0) return;
 
-    // ADX regime filter: skip patterns in choppy/ranging markets
-    if (tenMin.length >= 29) {
-      const adx = calculateADX(tenMin.slice(0, -1), 14);
-      if (adx !== null && adx < 20) {
-        logger.debug(`[EngulfingPattern] ${symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
-        return;
-      }
+    // ADX regime filter
+    if (adxValue !== undefined && adxValue < 20) {
+      logger.debug(`[EngulfingPattern] ${symbol}: ADX=${adxValue.toFixed(1)}<20 — choppy, skipping`);
+      this.snapshots.set(symbol, { symbol, trend, adx: adxValue, volRatio, lastPattern: 'NONE', tradesExecutedToday: state.tradesExecutedToday });
+      return;
     }
 
     const isBullishEngulf =
@@ -109,6 +122,10 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     // RSI gate: avoid buying overbought (≥70) or selling oversold (≤30)
     const closes = tenMin.slice(0, -1).map(c => c.close); // confirmed candles only
     const rsi = calculateRSI(closes, 14);
+
+    const detectedPattern: 'BULLISH' | 'BEARISH' | 'NONE' =
+      isBullishEngulf ? 'BULLISH' : isBearishEngulf ? 'BEARISH' : 'NONE';
+    this.snapshots.set(symbol, { symbol, trend, adx: adxValue, volRatio, lastPattern: detectedPattern, tradesExecutedToday: state.tradesExecutedToday });
 
     if (isBullishEngulf && trend === 'UP') {
       if (rsi !== null && rsi >= 70) {
@@ -220,6 +237,10 @@ export class EngulfingPatternStrategy extends BaseStrategy {
   private isAfterMarketCutoff(): boolean {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     return istNow.getHours() >= 15;
+  }
+
+  public getSnapshot(): EngulfingSnapshot[] {
+    return Array.from(this.snapshots.values());
   }
 
   // IStrategy mandatory overrides (not tick-based — do nothing on tick)

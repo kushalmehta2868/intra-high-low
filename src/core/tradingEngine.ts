@@ -1142,14 +1142,39 @@ export class TradingEngine extends EventEmitter {
     // Start 15-minute market snapshot broadcast (only one interval at a time)
     if (!this.marketSnapshotInterval) {
       const sendSnapshot = async () => {
-        const breakoutStrategy = [...this.strategies.values()].find(
-          s => s instanceof DayHighLowBreakoutStrategy
-        ) as DayHighLowBreakoutStrategy | undefined;
-        if (!breakoutStrategy) return;
-        const snapshots = breakoutStrategy.getMarketSnapshot();
-        await this.telegramBot.sendMarketSnapshot(breakoutStrategy.getName(), snapshots).catch(err =>
-          logger.error('Failed to send market snapshot', { error: err.message })
-        );
+        const all = [...this.strategies.values()];
+
+        const breakoutStrategy = all.find(s => s instanceof DayHighLowBreakoutStrategy) as DayHighLowBreakoutStrategy | undefined;
+        if (breakoutStrategy) {
+          const snapshots = breakoutStrategy.getMarketSnapshot();
+          await this.telegramBot.sendMarketSnapshot(breakoutStrategy.getName(), snapshots).catch(err =>
+            logger.error('Failed to send DayHighLow snapshot', { error: err.message })
+          );
+        }
+
+        const engulfingStrategy = all.find(s => s instanceof EngulfingPatternStrategy) as EngulfingPatternStrategy | undefined;
+        if (engulfingStrategy) {
+          const snapshots = engulfingStrategy.getSnapshot();
+          await this.telegramBot.sendEngulfingSnapshot(snapshots).catch(err =>
+            logger.error('Failed to send Engulfing snapshot', { error: err.message })
+          );
+        }
+
+        const emaStrategy = all.find(s => s instanceof EMACrossoverStrategy) as EMACrossoverStrategy | undefined;
+        if (emaStrategy) {
+          const snapshots = emaStrategy.getSnapshot();
+          await this.telegramBot.sendEMASnapshot(snapshots).catch(err =>
+            logger.error('Failed to send EMA snapshot', { error: err.message })
+          );
+        }
+
+        const confluenceStrategy = all.find(s => s instanceof ConfluenceStrategy) as ConfluenceStrategy | undefined;
+        if (confluenceStrategy) {
+          const snapshots = confluenceStrategy.getSnapshot();
+          await this.telegramBot.sendConfluenceSnapshot(snapshots).catch(err =>
+            logger.error('Failed to send Confluence snapshot', { error: err.message })
+          );
+        }
       };
 
       this.marketSnapshotInterval = setInterval(sendSnapshot, 15 * 60 * 1000);

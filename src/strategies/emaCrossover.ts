@@ -12,6 +12,18 @@ interface DayState {
   lastCrossoverDirection: 'BUY' | 'SELL' | null;
 }
 
+export interface EMACrossoverSnapshot {
+  symbol: string;
+  trend: string;
+  adx: number | undefined;
+  ema9: number | undefined;
+  ema21: number | undefined;
+  emaGapPct: number | undefined; // (ema9 - ema21) / ema21 * 100
+  volRatio: number | undefined;
+  crossover: 'BUY' | 'SELL' | 'NONE';
+  tradesExecutedToday: number;
+}
+
 /**
  * EMACrossoverStrategy
  *
@@ -32,6 +44,7 @@ export class EMACrossoverStrategy extends BaseStrategy {
   private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
   private dayStates: Map<string, DayState> = new Map();
   private watchlist: string[];
+  private snapshots: Map<string, EMACrossoverSnapshot> = new Map();
 
   constructor(context: StrategyContext, watchlist: string[]) {
     super('EMACrossover', context);
@@ -69,7 +82,11 @@ export class EMACrossoverStrategy extends BaseStrategy {
     // Need ≥ 22 candles to compute EMA21 with at least 2 output values for crossover
     if (fiveMin.length < 23) return;
 
+    // Use closed candles only: last element is still-forming, second-to-last is last confirmed
+    const closedCandles = fiveMin.slice(0, -1);
     const closes = fiveMin.map((c: Candle) => c.close);
+    const closedCloses = closedCandles.map((c: Candle) => c.close);
+
     const ema9   = calculateEMA(closes, 9);
     const ema21  = calculateEMA(closes, 21);
 
@@ -81,34 +98,51 @@ export class EMACrossoverStrategy extends BaseStrategy {
     const ema21Prev = ema21[ema21.length - 2];
     const ema21Last = ema21[ema21.length - 1];
 
+    const emaGapPct = ema21Last > 0 ? ((ema9Last - ema21Last) / ema21Last) * 100 : undefined;
+
+    const trend    = get30MinTrend(thirtyMin);
+    const atr      = calculateATR(closedCandles, 14);
+    // Volume: compare last closed candle vs 10-bar history of closed candles
+    const lastClosed = closedCandles[closedCandles.length - 1];
+    const volAvg     = avgVolume(closedCandles.slice(-11, -1), 10);
+    const volRatio   = volAvg > 0 ? lastClosed.volume / volAvg : 0;
+
+    let adxValue: number | undefined;
+    if (fiveMin.length >= 29) {
+      const adx = calculateADX(closedCandles, 14);
+      if (adx !== null) adxValue = adx;
+    }
+
     const bullishCross = ema9Prev <= ema21Prev && ema9Last > ema21Last;
     const bearishCross = ema9Prev >= ema21Prev && ema9Last < ema21Last;
 
     if (!bullishCross && !bearishCross) {
       // No new crossover — reset the directional lock so future crosses fire
       state.lastCrossoverDirection = null;
+      this.snapshots.set(symbol, {
+        symbol, trend, adx: adxValue, ema9: ema9Last, ema21: ema21Last,
+        emaGapPct, volRatio, crossover: 'NONE', tradesExecutedToday: state.tradesExecutedToday,
+      });
       return;
     }
 
     const crossDirection: 'BUY' | 'SELL' = bullishCross ? 'BUY' : 'SELL';
 
+    // Record snapshot with current crossover direction
+    this.snapshots.set(symbol, {
+      symbol, trend, adx: adxValue, ema9: ema9Last, ema21: ema21Last,
+      emaGapPct, volRatio, crossover: crossDirection, tradesExecutedToday: state.tradesExecutedToday,
+    });
+
     // Prevent re-firing the same crossover on the next refresh before it reverses
     if (state.lastCrossoverDirection === crossDirection) return;
-
-    const trend    = get30MinTrend(thirtyMin);
-    const atr      = calculateATR(fiveMin.slice(0, -1), 14);
-    const volAvg   = avgVolume(fiveMin, 20);
-    const volRatio = volAvg > 0 ? fiveMin[fiveMin.length - 1].volume / volAvg : 0;
 
     if (!atr || atr === 0) return;
 
     // ADX regime filter: skip crossovers in choppy/ranging markets
-    if (fiveMin.length >= 29) {
-      const adx = calculateADX(fiveMin.slice(0, -1), 14);
-      if (adx !== null && adx < 20) {
-        logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adx.toFixed(1)}<20, choppy market`);
-        return;
-      }
+    if (adxValue !== undefined && adxValue < 20) {
+      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adxValue.toFixed(1)}<20, choppy market`);
+      return;
     }
 
     // Trend must be aligned
@@ -122,7 +156,7 @@ export class EMACrossoverStrategy extends BaseStrategy {
     }
 
     // RSI gate: avoid buying overbought (≥70) or selling oversold (≤30)
-    const rsi = calculateRSI(closes, 14);
+    const rsi = calculateRSI(closedCloses, 14);
     if (rsi !== null) {
       if (crossDirection === 'BUY' && rsi >= 70) {
         logger.info(`[EMACrossover] BUY cross on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
@@ -228,6 +262,10 @@ export class EMACrossoverStrategy extends BaseStrategy {
   private isAfterMarketCutoff(): boolean {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     return istNow.getHours() >= 15;
+  }
+
+  public getSnapshot(): EMACrossoverSnapshot[] {
+    return Array.from(this.snapshots.values());
   }
 
   // IStrategy mandatory overrides (candle-driven — no action on tick)
