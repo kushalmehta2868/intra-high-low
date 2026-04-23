@@ -285,7 +285,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         this.on_buy_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
       } else {
         // Reversed: cancel pending signal, reset flag so we can try again
-        logger.info(`🔁 [${symbol}] BUY breakout not confirmed (price reversed) - resetting`, {
+        logger.info(`[${this.name}] 🔁 [${symbol}] BUY breakout not confirmed — price reversed, resetting`, {
+          strategy: this.name,
+          symbol,
           breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
           currentLtp: `₹${ltp.toFixed(2)}`,
         });
@@ -301,7 +303,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         this.on_sell_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
       } else {
         // Reversed: cancel pending signal, reset flag so we can try again
-        logger.info(`🔁 [${symbol}] SELL breakout not confirmed (price reversed) - resetting`, {
+        logger.info(`[${this.name}] 🔁 [${symbol}] SELL breakout not confirmed — price reversed, resetting`, {
+          strategy: this.name,
+          symbol,
           breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
           currentLtp: `₹${ltp.toFixed(2)}`,
         });
@@ -344,7 +348,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
           ? data.volume.toLocaleString()
           : "N/A";
 
-      logger.info(`📊 [${data.symbol}] Price Levels Check`, {
+      const adx  = this.cachedADXs.get(data.symbol);
+      const rsi  = this.cachedRSIs.get(data.symbol);
+      const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
+
+      logger.info(`📊 [${this.name}] [${data.symbol}] Price Levels Check`, {
+        strategy: this.name,
         symbol: data.symbol,
         status: status,
         currentPrice: `₹${data.ltp.toFixed(2)}`,
@@ -356,6 +365,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         distanceToLow: `${distanceToLow.toFixed(2)}%`,
         hasBrokenHigh: state.hasBrokenHighToday,
         hasBrokenLow: state.hasBrokenLowToday,
+        indicators: {
+          trend,
+          adx: adx !== undefined ? adx.toFixed(1) : 'loading',
+          rsi: rsi !== undefined ? rsi.toFixed(1) : 'loading',
+          volRatio: volRatio !== undefined ? `${volRatio.toFixed(2)}x` : 'loading',
+        },
         timestamp: new Date().toLocaleTimeString("en-IN", {
           timeZone: "Asia/Kolkata",
         }),
@@ -413,7 +428,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // the stock is likely halted. Skip signals to avoid acting on stale data.
     const CIRCUIT_FREEZE_MS = 3 * 60 * 1000;
     if (Date.now() - state.lastPriceChangeAt > CIRCUIT_FREEZE_MS) {
-      logger.warn(`⛔ [${data.symbol}] Price frozen for 3+ min - possible circuit breaker, skipping signal`);
+      logger.warn(`[${this.name}] ⛔ [${data.symbol}] Price frozen 3+ min — possible circuit breaker, skipping signal`);
       return;
     }
 
@@ -425,7 +440,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // ADX regime filter: skip signals in choppy/ranging markets
     if (adx !== undefined && adx < 20) {
-      logger.debug(`[DayHighLow] ${data.symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
+      logger.info(`[${this.name}] 🚫 [${data.symbol}] Signal blocked — ADX=${adx.toFixed(1)}<20 (choppy market)`);
       return;
     }
 
@@ -433,29 +448,27 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const crossedBelowLow = prevLtp >= dayLow && ltp < dayLow;
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
-      // Trend filter: 30-min trend must be UP for a BUY breakout
       if (trend !== 'UP') {
-        logger.info(`🚫 [${data.symbol}] BUY breakout rejected - 30-min trend is ${trend}`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — 30-min trend is ${trend}`);
         return;
       }
 
-      // Check 5-min candle volume: current candle must be > 1.5× 20-bar average
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
-        logger.info(`🚫 [${data.symbol}] BUY signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
         return;
       }
 
-      // RSI gate: avoid buying when already overbought
       if (rsi !== undefined && rsi >= 70) {
-        logger.info(`🚫 [${data.symbol}] BUY breakout rejected — RSI overbought (${rsi.toFixed(1)})`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — RSI overbought (${rsi.toFixed(1)})`);
         return;
       }
 
-      // 2-tick confirmation: set pending signal, emit on next tick if confirmed
       state.hasBrokenHighToday = true;
       state.pendingSignal = { direction: 'BUY', breakoutLevel: dayHigh };
-      logger.info(`⏳ [${data.symbol}] BUY breakout detected - awaiting 1-tick confirmation`, {
+      logger.info(`[${this.name}] ⏳ [${data.symbol}] BUY breakout detected — awaiting 1-tick confirmation`, {
+        strategy: this.name,
+        symbol: data.symbol,
         dayHigh: `₹${dayHigh.toFixed(2)}`,
         ltp: `₹${ltp.toFixed(2)}`,
         volumeRatio: `${volRatio.toFixed(2)}x`,
@@ -464,29 +477,25 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     if (crossedBelowLow && !state.hasBrokenLowToday) {
-      // Trend filter: 30-min trend must be DOWN for a SELL breakout
       if (trend !== 'DOWN') {
-        logger.info(`🚫 [${data.symbol}] SELL breakout rejected - 30-min trend is ${trend}`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — 30-min trend is ${trend}`);
         return;
       }
 
-      // Check 5-min candle volume: current candle must be > 1.5× 20-bar average
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
-        logger.info(`🚫 [${data.symbol}] SELL signal rejected - insufficient volume (${volRatio.toFixed(2)}x, need 1.5x)`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
         return;
       }
 
-      // RSI gate: avoid selling when already oversold
       if (rsi !== undefined && rsi <= 30) {
-        logger.info(`🚫 [${data.symbol}] SELL breakout rejected — RSI oversold (${rsi.toFixed(1)})`);
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — RSI oversold (${rsi.toFixed(1)})`);
         return;
       }
 
-      // 2-tick confirmation
       state.hasBrokenLowToday = true;
       state.pendingSignal = { direction: 'SELL', breakoutLevel: dayLow };
-      logger.info(`⏳ [${data.symbol}] SELL breakout detected - awaiting 1-tick confirmation`, {
+      logger.info(`[${this.name}] ⏳ [${data.symbol}] SELL breakout detected — awaiting 1-tick confirmation`, {
         dayLow: `₹${dayLow.toFixed(2)}`,
         ltp: `₹${ltp.toFixed(2)}`,
         volumeRatio: `${volRatio.toFixed(2)}x`,
@@ -695,6 +704,48 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
   public getWatchlist(): string[] {
     return [...this.watchlist];
+  }
+
+  public getMarketSnapshot(): Array<{
+    symbol: string;
+    ltp: number;
+    open: number;
+    dayHigh: number;
+    dayLow: number;
+    distToHigh: number;
+    distToLow: number;
+    trend: string;
+    adx: number | undefined;
+    rsi: number | undefined;
+    volRatio: number | undefined;
+    isInCooldown: boolean;
+    tradesExecutedToday: number;
+  }> {
+    const result = [];
+    for (const [symbol, state] of this.symbolStates.entries()) {
+      if (state.prevLtp === 0 && state.dayHigh === 0) continue; // not yet initialized
+      const ltp = state.prevLtp;
+      const distToHigh = state.dayHigh > 0 ? ((state.dayHigh - ltp) / ltp) * 100 : 0;
+      const distToLow  = state.dayLow !== Infinity ? ((ltp - state.dayLow) / ltp) * 100 : 0;
+      result.push({
+        symbol,
+        ltp,
+        open: state.open,
+        dayHigh: state.dayHigh,
+        dayLow:  state.dayLow === Infinity ? 0 : state.dayLow,
+        distToHigh,
+        distToLow,
+        trend:    this.cachedTrends.get(symbol) ?? 'NEUTRAL',
+        adx:      this.cachedADXs.get(symbol),
+        rsi:      this.cachedRSIs.get(symbol),
+        volRatio: this.cachedVolumeRatios.get(symbol),
+        isInCooldown: state.isInCooldown,
+        tradesExecutedToday: state.tradesExecutedToday,
+      });
+    }
+    // Sort: nearest to breakout first (min of distToHigh, distToLow)
+    result.sort((a, b) => Math.min(a.distToHigh, a.distToLow) - Math.min(b.distToHigh, b.distToLow));
+    return result;
   }
 
   public resetDailyData(): void {

@@ -358,6 +358,88 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     await this.sendMessage(message);
   }
 
+  public async sendMarketSnapshot(
+    strategyName: string,
+    snapshots: Array<{
+      symbol: string;
+      ltp: number;
+      open: number;
+      dayHigh: number;
+      dayLow: number;
+      distToHigh: number;
+      distToLow: number;
+      trend: string;
+      adx: number | undefined;
+      rsi: number | undefined;
+      volRatio: number | undefined;
+      isInCooldown: boolean;
+      tradesExecutedToday: number;
+    }>
+  ): Promise<void> {
+    if (snapshots.length === 0) return;
+
+    const timeStr = new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const trendEmoji = (t: string) => t === 'UP' ? '🟢' : t === 'DOWN' ? '🔴' : '⚪';
+    const filtersOk = (s: typeof snapshots[0]) =>
+      s.trend !== 'NEUTRAL' &&
+      (s.adx === undefined || s.adx >= 20) &&
+      (s.volRatio === undefined || s.volRatio >= 1.5);
+
+    const readyCount = snapshots.filter(filtersOk).length;
+    const nearCount  = snapshots.filter(s => Math.min(s.distToHigh, s.distToLow) < 0.7).length;
+
+    // Chunk into groups of 15 symbols per message (keeps each under 4096 chars)
+    const CHUNK = 15;
+    for (let i = 0; i < snapshots.length; i += CHUNK) {
+      const chunk = snapshots.slice(i, i + CHUNK);
+      const pageNum   = Math.floor(i / CHUNK) + 1;
+      const totalPages = Math.ceil(snapshots.length / CHUNK);
+
+      let msg = `📊 *${strategyName}*\n`;
+      msg += `🕐 ${timeStr} IST`;
+      if (totalPages > 1) msg += `  •  Page ${pageNum}/${totalPages}`;
+      msg += `\n`;
+      if (pageNum === 1) {
+        msg += `✅ Filters ready: ${readyCount}  ⚡ Near breakout: ${nearCount}\n`;
+      }
+      msg += `${'─'.repeat(30)}\n`;
+
+      for (const s of chunk) {
+        if (s.ltp === 0) continue;
+        const near    = Math.min(s.distToHigh, s.distToLow);
+        const nearTag = near < 0.3 ? ' 🔥' : near < 0.7 ? ' ⚡' : '';
+        const coolTag = s.isInCooldown ? ' 🔒' : '';
+        const readyTag = filtersOk(s) ? ' ✅' : '';
+
+        const adxStr = s.adx !== undefined
+          ? (s.adx >= 20 ? `${s.adx.toFixed(0)} ✅` : `${s.adx.toFixed(0)} (need +${(20 - s.adx).toFixed(0)})`)
+          : '--';
+        const rsiStr = s.rsi !== undefined
+          ? (s.rsi >= 30 && s.rsi <= 70 ? `${s.rsi.toFixed(0)} ✅` : s.rsi > 70 ? `${s.rsi.toFixed(0)} (OB, -${(s.rsi - 70).toFixed(0)})` : `${s.rsi.toFixed(0)} (OS, +${(30 - s.rsi).toFixed(0)})`)
+          : '--';
+        const volStr = s.volRatio !== undefined
+          ? (s.volRatio >= 1.5 ? `${s.volRatio.toFixed(1)}x ✅` : `${s.volRatio.toFixed(1)}x (need +${(1.5 - s.volRatio).toFixed(1)}x)`)
+          : '--';
+
+        const rupToHigh = (s.dayHigh - s.ltp).toFixed(0);
+        const rupToLow  = (s.ltp - s.dayLow).toFixed(0);
+
+        msg += `\n*${s.symbol.replace('-EQ', '')}*${nearTag}${coolTag}${readyTag}\n`;
+        msg += `  ₹${s.ltp.toFixed(0)}  H:${s.dayHigh.toFixed(0)} L:${s.dayLow.toFixed(0)}\n`;
+        msg += `  ↑₹${rupToHigh} (${s.distToHigh.toFixed(1)}%) to high\n`;
+        msg += `  ↓₹${rupToLow} (${s.distToLow.toFixed(1)}%) to low\n`;
+        msg += `  ${trendEmoji(s.trend)} ${s.trend}  ADX:${adxStr}  RSI:${rsiStr}  Vol:${volStr}\n`;
+      }
+
+      await this.sendMessage(msg);
+    }
+  }
+
   public async start(): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not configured, skipping startup');

@@ -76,6 +76,9 @@ export class TradingEngine extends EventEmitter {
   // Dashboard display interval
   private dashboardDisplayInterval?: NodeJS.Timeout;
 
+  // Market snapshot broadcast interval (every 15 minutes)
+  private marketSnapshotInterval?: NodeJS.Timeout;
+
   // Background reconnection
   private reconnectionInterval?: NodeJS.Timeout;
   private readonly RECONNECTION_INTERVAL_MS = 60 * 1000; // Try reconnecting every 1 minute
@@ -1135,9 +1138,34 @@ export class TradingEngine extends EventEmitter {
       await this.candleDataService.start(this.watchlist);
       logger.info('✅ CandleDataService started');
     }
+
+    // Start 15-minute market snapshot broadcast (only one interval at a time)
+    if (!this.marketSnapshotInterval) {
+      const sendSnapshot = async () => {
+        const breakoutStrategy = [...this.strategies.values()].find(
+          s => s instanceof DayHighLowBreakoutStrategy
+        ) as DayHighLowBreakoutStrategy | undefined;
+        if (!breakoutStrategy) return;
+        const snapshots = breakoutStrategy.getMarketSnapshot();
+        await this.telegramBot.sendMarketSnapshot(breakoutStrategy.getName(), snapshots).catch(err =>
+          logger.error('Failed to send market snapshot', { error: err.message })
+        );
+      };
+
+      this.marketSnapshotInterval = setInterval(sendSnapshot, 15 * 60 * 1000);
+      logger.info('✅ Market snapshot broadcast started (every 15 min)');
+
+      // Send one immediately so you don't wait 15 min after startup
+      sendSnapshot().catch(() => {});
+    }
   }
 
   private async stopStrategies(): Promise<void> {
+    if (this.marketSnapshotInterval) {
+      clearInterval(this.marketSnapshotInterval);
+      this.marketSnapshotInterval = undefined;
+      logger.info('✅ Market snapshot broadcast stopped');
+    }
     if (this.candleDataService) {
       this.candleDataService.stop();
     }

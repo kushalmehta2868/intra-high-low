@@ -1,18 +1,6 @@
 import { logger } from '../utils/logger';
 import axios from 'axios';
 
-interface SymbolToken {
-  symbol: string;
-  token: string;
-  name: string;
-  expiry?: string;
-  strike?: string;
-  lotsize?: string;
-  instrumenttype: string;
-  exch_seg: string;
-  tick_size?: string;
-}
-
 /**
  * Symbol Token Service - Fetches and caches symbol tokens from Angel One API
  * Prevents hardcoded tokens from breaking when Angel One updates their master data
@@ -104,7 +92,9 @@ export class SymbolTokenService {
       // Use fallback tokens instead
       if (equityCount === 0) {
         logger.warn('⚠️  No equity symbols found in master data - API structure may have changed');
-        logger.debug('First item from API response:', response.data[0]);
+        // Log first few items so we can see the actual format and fix the filter
+        const sample = response.data.slice(0, 3);
+        logger.info('ScripMaster sample rows (first 3 items):', { sample });
         this.loadFallbackTokens();
         return;
       }
@@ -139,30 +129,67 @@ export class SymbolTokenService {
     logger.warn('⚠️  Using fallback hardcoded tokens - may be outdated');
 
     const fallbackTokens: Record<string, string> = {
-      'RELIANCE-EQ': '2885',
-      'TCS-EQ': '11536',
-      'INFY-EQ': '1594',
+      // Banking & Finance
       'HDFCBANK-EQ': '1333',
       'ICICIBANK-EQ': '4963',
-      'TRENT-EQ': '1964',
-      'ULTRACEMCO-EQ': '11532',
-      'MUTHOOTFIN-EQ': '23650',
-      'COFORGE-EQ': '11543',
-      'ABB-EQ': '13',
-      'ALKEM-EQ': '11703',
-      'AMBER-EQ': '1185',
-      'ANGELONE-EQ': '324',
-      'APOLLOHOSP-EQ': '157',
+      'KOTAKBANK-EQ': '1922',
+      'SBIN-EQ': '3045',
+      'AXISBANK-EQ': '5900',
+      'INDUSINDBK-EQ': '5258',
+      'BAJFINANCE-EQ': '317',
+      'BAJAJFINSV-EQ': '16675',
+      'SHRIRAMFIN-EQ': '4306',
+      // IT
+      'TCS-EQ': '11536',
+      'INFY-EQ': '1594',
+      'HCLTECH-EQ': '7229',
+      'WIPRO-EQ': '3787',
+      'TECHM-EQ': '13538',
+      // Oil & Gas / Energy
+      'RELIANCE-EQ': '2885',
+      'ONGC-EQ': '2475',
+      'BPCL-EQ': '526',
+      'NTPC-EQ': '11630',
+      'POWERGRID-EQ': '14977',
+      // Auto
+      'MARUTI-EQ': '10999',
       'BAJAJ-AUTO-EQ': '16669',
-      'BHARTIARTL-EQ': '10604',
+      'EICHERMOT-EQ': '910',
+      'HEROMOTOCO-EQ': '1348',
+      'M&M-EQ': '2031',
+      // Metals & Mining
+      'TATASTEEL-EQ': '3499',
+      'JSWSTEEL-EQ': '11723',
+      'HINDALCO-EQ': '1363',
+      'COALINDIA-EQ': '20374',
+      // Pharma
+      'SUNPHARMA-EQ': '3351',
+      'DRREDDY-EQ': '881',
+      'CIPLA-EQ': '694',
+      // Consumer / FMCG
+      'HINDUNILVR-EQ': '1394',
+      'ITC-EQ': '1660',
       'BRITANNIA-EQ': '547',
-      'BSE-EQ': '19585',
-      'CUMMINSIND-EQ': '1901',
-      'DIXON-EQ': '21690',
+      'NESTLEIND-EQ': '17963',
+      'TATACONSUM-EQ': '3432',
+      // Cement & Building
+      'ULTRACEMCO-EQ': '11532',
       'GRASIM-EQ': '1232',
-      'HAL-EQ': '2303',
-      'HDFCAMC-EQ': '4244',
-      'HEROMOTOCO-EQ': '1348'
+      // Telecom
+      'BHARTIARTL-EQ': '10604',
+      // Infra & Engineering
+      'LT-EQ': '11483',
+      'ADANIPORTS-EQ': '15083',
+      'ADANIENT-EQ': '25',
+      'BEL-EQ': '383',
+      // Healthcare
+      'APOLLOHOSP-EQ': '157',
+      // Consumer Discretionary
+      'ASIANPAINT-EQ': '236',
+      'TITAN-EQ': '3506',
+      'TRENT-EQ': '1964',
+      // New Economy
+      'ETERNAL-EQ': '21808',
     };
 
     for (const [symbol, token] of Object.entries(fallbackTokens)) {
