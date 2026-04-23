@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position, Candle } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateEMA, calculateATR, calculateRSI, calculateADX, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateEMA, calculateATR, calculateRSI, calculateADX, get30MinTrend, sessionVolumeRatio } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -102,11 +102,9 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
     const trend    = get30MinTrend(thirtyMin);
     const atr      = calculateATR(closedCandles, 14);
-    // Volume: compare last closed candle vs 10-bar history
-    // avgVolume(arr, 10) internally takes arr.slice(-11, -1), so pass closedCandles directly
+    // Session volume ratio: last closed candle vs today's session average
     const lastClosed = closedCandles[closedCandles.length - 1];
-    const volAvg     = avgVolume(closedCandles, 10);
-    const volRatio   = volAvg > 0 ? lastClosed.volume / volAvg : 0;
+    const volRatio   = sessionVolumeRatio(closedCandles);
 
     let adxValue: number | undefined;
     if (fiveMin.length >= 30) {
@@ -152,8 +150,8 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if (crossDirection === 'SELL' && trend !== 'DOWN')  return;
 
     // Volume must confirm (1.5× minimum)
-    if (volRatio < 1.5) {
-      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x)`);
+    if (volRatio > 0 && volRatio < 1.3) {
+      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x < 1.3x)`);
       return;
     }
 
@@ -230,7 +228,7 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if ((action === 'BUY' && trend === 'UP') || (action === 'SELL' && trend === 'DOWN')) {
       score += 0.05;
     }
-    if (volRatio >= 2.0)      score += 0.05;
+    if (volRatio >= 1.5)      score += 0.05;
     if (ema9SlopePct >= 0.05) score += 0.05;
 
     return Math.min(score, 0.90);

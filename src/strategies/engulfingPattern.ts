@@ -1,7 +1,7 @@
 import { BaseStrategy } from './base';
 import { StrategyContext, StrategySignal, MarketData, Position } from '../types';
 import { CandleBundle } from '../services/candleDataService';
-import { calculateATR, calculateRSI, calculateADX, get30MinTrend, avgVolume } from '../utils/indicators';
+import { calculateATR, calculateRSI, calculateADX, get30MinTrend, sessionVolumeRatio } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
 
@@ -87,10 +87,10 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     if ([prev.open, prev.high, prev.low, prev.close,
          curr.open, curr.high, curr.low, curr.close].some(v => !v || isNaN(v))) return;
 
-    const trend    = get30MinTrend(thirtyMin);
-    const atr      = calculateATR(tenMin.slice(0, -1), 14);
-    const volAvg   = avgVolume(tenMin.slice(0, -1), 20);
-    const volRatio = volAvg > 0 ? curr.volume / volAvg : 0;
+    const trend        = get30MinTrend(thirtyMin);
+    const atr          = calculateATR(tenMin.slice(0, -1), 14);
+    const closedTenMin = tenMin.slice(0, -1);
+    const volRatio     = sessionVolumeRatio(closedTenMin);
 
     let adxValue: number | undefined;
     if (tenMin.length >= 30) {
@@ -133,11 +133,19 @@ export class EngulfingPatternStrategy extends BaseStrategy {
         logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
         return;
       }
+      if (volRatio > 0 && volRatio < 1.3) {
+        logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
+        return;
+      }
       const confidence = this.scoreConfidence(curr, trend, 'BUY', volRatio);
       this.emitEngulfSignal(symbol, 'BUY', ltp || curr.close, atr, confidence, state);
     } else if (isBearishEngulf && trend === 'DOWN') {
       if (rsi !== null && rsi <= 30) {
         logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
+        return;
+      }
+      if (volRatio > 0 && volRatio < 1.3) {
+        logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
         return;
       }
       const confidence = this.scoreConfidence(curr, trend, 'SELL', volRatio);
@@ -207,8 +215,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
       score += 0.05;
     }
 
-    // Volume surge
-    if (volRatio >= 2.0) {
+    // Volume surge vs recent session activity
+    if (volRatio >= 1.5) {
       score += 0.05;
     }
 

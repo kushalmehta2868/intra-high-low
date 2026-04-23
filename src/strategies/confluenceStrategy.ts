@@ -8,7 +8,7 @@ import {
   calculateMACD,
   calculateADX,
   calculateSessionVWAP,
-  avgVolume,
+  sessionVolumeRatio,
 } from '../utils/indicators';
 import { getSymbolMarginMultiplier } from '../config/symbolConfig';
 import { logger } from '../utils/logger';
@@ -50,12 +50,12 @@ function s1_rsiMacdScalp(candles: Candle[], price: number): Vote {
   const N = (r: string): Vote => ({ direction: 'NEUTRAL', slDist: null, tpDist: null, reason: r });
   if (candles.length < 40) return N('S1: need ≥40 candles');
 
-  const closes = candles.map(c => c.close);
-  const rsi    = calculateRSI(closes, 14);
-  const macd   = calculateMACD(closes);
-  const ema9   = calculateEMA(closes, 9);
-  const volAvg = avgVolume(candles, 20);
-  const atr    = calculateATR(candles, 14);
+  const closes   = candles.map(c => c.close);
+  const rsi      = calculateRSI(closes, 14);
+  const macd     = calculateMACD(closes);
+  const ema9     = calculateEMA(closes, 9);
+  const volRatio = sessionVolumeRatio(candles);
+  const atr      = calculateATR(candles, 14);
 
   if (rsi === null || !macd || ema9.length < 2 || !atr) return N('S1: indicator not ready');
 
@@ -67,21 +67,20 @@ function s1_rsiMacdScalp(candles: Candle[], price: number): Vote {
   const crossDn = macdLine[last - 1] > signalLine[last - 1] && macdLine[last] <= signalLine[last];
 
   const latestEMA9 = ema9[ema9.length - 1];
-  const curVol     = candles[candles.length - 1].volume;
 
   const slDist = Math.max(atr * 1.0, price * 0.003);
   const tpDist = Math.max(atr * 2.0, price * 0.006);
 
-  if (rsi < 35 && crossUp && price > latestEMA9 && curVol > volAvg) {
+  if (rsi < 35 && crossUp && price > latestEMA9 && volRatio >= 1.0) {
     return {
       direction: 'BUY', slDist, tpDist,
-      reason: `S1 BUY: RSI=${rsi.toFixed(1)}<35 MACD↑ price>EMA9 vol=${curVol.toFixed(0)}>${volAvg.toFixed(0)}`,
+      reason: `S1 BUY: RSI=${rsi.toFixed(1)}<35 MACD↑ price>EMA9 vol=${volRatio.toFixed(2)}x`,
     };
   }
-  if (rsi > 65 && crossDn && price < latestEMA9 && curVol > volAvg) {
+  if (rsi > 65 && crossDn && price < latestEMA9 && volRatio >= 1.0) {
     return {
       direction: 'SELL', slDist, tpDist,
-      reason: `S1 SELL: RSI=${rsi.toFixed(1)}>65 MACD↓ price<EMA9 vol=${curVol.toFixed(0)}>${volAvg.toFixed(0)}`,
+      reason: `S1 SELL: RSI=${rsi.toFixed(1)}>65 MACD↓ price<EMA9 vol=${volRatio.toFixed(2)}x`,
     };
   }
   return N(`S1: no signal (RSI=${rsi.toFixed(1)}, crossUp=${crossUp}, crossDn=${crossDn})`);
@@ -115,19 +114,18 @@ function s2_breakoutRetest(candles: Candle[], price: number): Vote {
     return N(`S2: range too wide (${(rangeSize / midpoint * 100).toFixed(2)}%)`);
   }
 
-  const atr    = calculateATR(candles, 14);
-  const volAvg = avgVolume(candles.slice(0, len - 1), 20);
-  if (!atr || !volAvg) return N('S2: ATR or volAvg not ready');
+  const atr      = calculateATR(candles, 14);
+  const volRatio = sessionVolumeRatio(candles);
+  if (!atr) return N('S2: ATR not ready');
 
-  const volThreshold    = volAvg * 1.8;
   const retestTolerance = price * 0.003;
 
   const slDist = Math.max(atr * 1.5, price * 0.003);
   const tpDist = Math.max(slDist * 2.5, price * 0.0075);
 
   if (current.close > resistance) {
-    if (current.volume < volThreshold) {
-      return N(`S2: breakout above ${resistance.toFixed(2)} but low volume`);
+    if (volRatio < 1.5) {
+      return N(`S2: breakout above ${resistance.toFixed(2)} but low volume (${volRatio.toFixed(2)}x)`);
     }
     const wickRetest  = current.low  <= resistance + retestTolerance;
     const priorRetest = prev
@@ -143,8 +141,8 @@ function s2_breakoutRetest(candles: Candle[], price: number): Vote {
   }
 
   if (current.close < support) {
-    if (current.volume < volThreshold) {
-      return N(`S2: breakdown below ${support.toFixed(2)} but low volume`);
+    if (volRatio < 1.5) {
+      return N(`S2: breakdown below ${support.toFixed(2)} but low volume (${volRatio.toFixed(2)}x)`);
     }
     const wickRetest  = current.high >= support - retestTolerance;
     const priorRetest = prev

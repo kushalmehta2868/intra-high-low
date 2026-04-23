@@ -134,6 +134,40 @@ export function avgVolume(candles: Candle[], period: number): number {
   return history.reduce((s, c) => s + c.volume, 0) / period;
 }
 
+/**
+ * Session Volume Ratio — compares the last candle's volume to the average of
+ * the most recent `lookback` candles from the same trading day.
+ *
+ * Uses a rolling window rather than the all-day average because intraday volume
+ * follows a U-curve (high open, low mid-day, high close). Comparing a 12pm candle
+ * to an all-day average that includes the high-volume 9:15am opening candles would
+ * make genuine mid-day surges look weak. A rolling window of recent same-day
+ * candles reflects actual current activity level.
+ *
+ * A ratio ≥ 1.5 means the candle traded 50% more than recent typical activity.
+ *
+ * @param candles   Closed candles only (live/partial candle must already be excluded).
+ * @param lookback  Number of recent same-day candles to use as baseline (default 10).
+ * @returns ratio, or 0 if fewer than 2 same-day candles exist.
+ */
+export function sessionVolumeRatio(candles: Candle[], lookback = 10): number {
+  if (candles.length < 2) return 0;
+
+  const current     = candles[candles.length - 1];
+  const currentDate = current.timestamp.toDateString();
+
+  const todayPrior = candles
+    .slice(0, -1)
+    .filter(c => c.timestamp.toDateString() === currentDate);
+
+  if (todayPrior.length === 0) return 0;
+
+  // Use the most recent `lookback` candles as the baseline (or all available if fewer)
+  const window = todayPrior.slice(-lookback);
+  const avg    = window.reduce((sum, c) => sum + c.volume, 0) / window.length;
+  return avg > 0 ? current.volume / avg : 0;
+}
+
 export interface MACDResult {
   macdLine:   number[];
   signalLine: number[];

@@ -7,7 +7,7 @@ import {
 } from "../types";
 import { logger } from "../utils/logger";
 import { getSymbolMarginMultiplier } from "../config/symbolConfig";
-import { avgVolume, calculateATR, calculateRSI, calculateADX, get30MinTrend } from "../utils/indicators";
+import { calculateATR, calculateRSI, calculateADX, get30MinTrend, sessionVolumeRatio } from "../utils/indicators";
 import { CandleBundle } from "../services/candleDataService";
 import { strategyStateStore } from "../services/strategyStateStore";
 
@@ -617,19 +617,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   public handleCandleUpdate(symbol: string, bundle: CandleBundle, _ltp: number): void {
     const { fiveMin, thirtyMin } = bundle;
 
-    // Volume ratio: most recently CLOSED 5-min candle vs 10-bar average.
-    // fiveMin[last] is the still-forming candle (fetched 1 min after close),
-    // so we use fiveMin[-2] as the closed reference candle and average the
-    // 10 bars before it. 10 bars (50 min) stays within the same session,
-    // avoiding contamination from previous days' volume profiles.
-    if (fiveMin.length >= 12) {
-      const closedCandles = fiveMin.slice(0, -1);           // exclude live candle
-      const refCandle     = closedCandles[closedCandles.length - 1]; // just-closed
-      const history       = closedCandles.slice(-11, -1);   // 10 bars before it
-      const volAvg        = history.length > 0
-        ? history.reduce((s, c) => s + c.volume, 0) / history.length
-        : 0;
-      this.cachedVolumeRatios.set(symbol, volAvg > 0 ? refCandle.volume / volAvg : 0);
+    // Session volume ratio: just-closed candle vs average of all today's closed candles.
+    if (fiveMin.length >= 2) {
+      const closedCandles = fiveMin.slice(0, -1);
+      this.cachedVolumeRatios.set(symbol, sessionVolumeRatio(closedCandles));
     }
 
     // ATR(14) from 5-min candles — exclude the live (still-forming) candle

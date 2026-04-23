@@ -493,7 +493,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     const bullish = snapshots.filter(s => s.lastPattern === 'BULLISH').length;
     const bearish = snapshots.filter(s => s.lastPattern === 'BEARISH').length;
     const adxPass = snapshots.filter(s => s.adx !== undefined && s.adx >= 20).length;
-    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.5).length;
+    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.3).length;
     const upTrend = snapshots.filter(s => s.trend === 'UP').length;
     const dnTrend = snapshots.filter(s => s.trend === 'DOWN').length;
 
@@ -501,7 +501,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     msg += `${'─'.repeat(28)}\n`;
     msg += `🟢 UP: ${upTrend}  🔴 DOWN: ${dnTrend}  ⚪ Flat: ${snapshots.length - upTrend - dnTrend}\n`;
     msg += `📈 ADX≥20: ${adxPass}/${snapshots.filter(s => s.adx !== undefined).length}\n`;
-    msg += `📦 Vol≥1.5x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
+    msg += `📦 Vol≥1.3x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
     msg += `🕯 Bullish: ${bullish}  🕯 Bearish: ${bearish}\n`;
     msg += `${'─'.repeat(28)}\n`;
 
@@ -515,7 +515,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
           ? (s.adx >= 20 ? `${s.adx.toFixed(0)}✅` : `${s.adx.toFixed(0)}(+${(20 - s.adx).toFixed(0)})`)
           : '--';
         const volStr = s.volRatio !== undefined
-          ? (s.volRatio >= 1.5 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.5 - s.volRatio).toFixed(1)}x)`)
+          ? (s.volRatio >= 1.3 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.3 - s.volRatio).toFixed(1)}x)`)
           : '--';
         const patE = s.lastPattern === 'BULLISH' ? '🟩' : s.lastPattern === 'BEARISH' ? '🟥' : '⬜';
         const trades = s.tradesExecutedToday > 0 ? ` [${s.tradesExecutedToday}/2]` : '';
@@ -548,7 +548,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     const buyX  = snapshots.filter(s => s.crossover === 'BUY').length;
     const sellX = snapshots.filter(s => s.crossover === 'SELL').length;
     const adxPass = snapshots.filter(s => s.adx !== undefined && s.adx >= 20).length;
-    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.5).length;
+    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.3).length;
     const upTrend = snapshots.filter(s => s.trend === 'UP').length;
     const dnTrend = snapshots.filter(s => s.trend === 'DOWN').length;
 
@@ -556,7 +556,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     msg += `${'─'.repeat(28)}\n`;
     msg += `🟢 UP: ${upTrend}  🔴 DOWN: ${dnTrend}  ⚪ Flat: ${snapshots.length - upTrend - dnTrend}\n`;
     msg += `📈 ADX≥20: ${adxPass}/${snapshots.filter(s => s.adx !== undefined).length}\n`;
-    msg += `📦 Vol≥1.5x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
+    msg += `📦 Vol≥1.3x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
     msg += `📊 Cross BUY: ${buyX}  SELL: ${sellX}\n`;
     msg += `${'─'.repeat(28)}\n`;
 
@@ -571,7 +571,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
           ? (s.adx >= 20 ? `${s.adx.toFixed(0)}✅` : `${s.adx.toFixed(0)}(+${(20 - s.adx).toFixed(0)})`)
           : '--';
         const volStr = s.volRatio !== undefined
-          ? (s.volRatio >= 1.5 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.5 - s.volRatio).toFixed(1)}x)`)
+          ? (s.volRatio >= 1.3 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.3 - s.volRatio).toFixed(1)}x)`)
           : '--';
         const gapStr = s.emaGapPct !== undefined ? `gap:${s.emaGapPct > 0 ? '+' : ''}${s.emaGapPct.toFixed(2)}%` : '';
         const trades = s.tradesExecutedToday > 0 ? ` [${s.tradesExecutedToday}/2]` : '';
