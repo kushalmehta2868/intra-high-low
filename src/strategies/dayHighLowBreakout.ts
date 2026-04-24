@@ -39,8 +39,8 @@ interface SymbolState {
   // 2-tick breakout confirmation: set on first cross, cleared on confirm/cancel
   pendingSignal: PendingSignal | null;
 
-  // Circuit breaker detection: timestamp of last price movement
-  lastPriceChangeAt: number;
+  // Circuit breaker detection: timestamp of last tick received (not price change)
+  lastTickAt: number;
 
   lastLogTime: number; // Track last log time for periodic logging
   lastResetDate: string; // Track when we last reset for new day (IST YYYY-MM-DD)
@@ -103,7 +103,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         positionClosedAt,
         isInCooldown,
         pendingSignal: null,
-        lastPriceChangeAt: now,
+        lastTickAt: now,
         lastLogTime: 0,
         lastResetDate: saved?.lastResetDate || "",
       });
@@ -146,7 +146,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.dayHigh = data.high || data.ltp; // Initialize from real data, not 0
       state.dayLow = data.low || data.ltp; // Initialize from real data, not Infinity
       state.prevLtp = data.ltp;
-      state.lastPriceChangeAt = Date.now();
+      state.lastTickAt = Date.now();
       logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
         open: `₹${state.open.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
@@ -155,10 +155,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       });
     }
 
-    // Track price movement for circuit breaker detection
-    if (data.ltp !== state.prevLtp) {
-      state.lastPriceChangeAt = Date.now();
-    }
+    // Track tick arrival for circuit breaker detection (price can be flat; ticks stop only on halt)
+    state.lastTickAt = Date.now();
 
     // Check pending signal confirmation (2-tick confirmation logic)
     if (state.pendingSignal) {
@@ -209,7 +207,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.positionClosedAt = null;
       state.isInCooldown = false;
       state.pendingSignal = null;
-      state.lastPriceChangeAt = Date.now();
+      state.lastTickAt = Date.now();
       state.lastResetDate = istDate;
 
       logger.info(`🔄 New trading day - state reset`, { date: istDate });
@@ -427,7 +425,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // SHOULD FIX #11 — Circuit breaker guard: if price has not moved in 3+ minutes,
     // the stock is likely halted. Skip signals to avoid acting on stale data.
     const CIRCUIT_FREEZE_MS = 3 * 60 * 1000;
-    if (Date.now() - state.lastPriceChangeAt > CIRCUIT_FREEZE_MS) {
+    if (Date.now() - state.lastTickAt > CIRCUIT_FREEZE_MS) {
       logger.warn(`[${this.name}] ⛔ [${data.symbol}] Price frozen 3+ min — possible circuit breaker, skipping signal`);
       return;
     }
@@ -708,7 +706,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         positionClosedAt: null,
         isInCooldown: false,
         pendingSignal: null,
-        lastPriceChangeAt: Date.now(),
+        lastTickAt: Date.now(),
         lastLogTime: 0,
         lastResetDate: "",
       });
@@ -788,7 +786,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.positionClosedAt = null;
       state.isInCooldown = false;
       state.pendingSignal = null;
-      state.lastPriceChangeAt = Date.now();
+      state.lastTickAt = Date.now();
       state.lastLogTime = 0;
       state.lastResetDate = today;
     }
