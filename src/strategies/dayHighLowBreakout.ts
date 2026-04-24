@@ -348,8 +348,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
           ? data.volume.toLocaleString()
           : "N/A";
 
-      const adx  = this.cachedADXs.get(data.symbol);
-      const rsi  = this.cachedRSIs.get(data.symbol);
+      const adx = this.cachedADXs.get(data.symbol);
+      const rsi = this.cachedRSIs.get(data.symbol);
       const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
 
       logger.info(`📊 [${this.name}] [${data.symbol}] Price Levels Check`, {
@@ -435,8 +435,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     const ltp = data.ltp;
     const prevLtp = state.prevLtp;
     const trend = this.cachedTrends.get(data.symbol) ?? 'NEUTRAL';
-    const rsi   = this.cachedRSIs.get(data.symbol);
-    const adx   = this.cachedADXs.get(data.symbol);
+    const rsi = this.cachedRSIs.get(data.symbol);
+    const adx = this.cachedADXs.get(data.symbol);
 
     // ADX regime filter: skip signals in choppy/ranging markets
     // Threshold 15 is appropriate for 5-min intraday (20 is calibrated for daily charts)
@@ -475,8 +475,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       }
 
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
-      if (volRatio < 1.5) {
-        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
+      if (volRatio < 0.5) {
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);
         return;
       }
 
@@ -504,8 +504,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       }
 
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
-      if (volRatio < 1.5) {
-        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
+      if (volRatio < 0.5) {
+        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);
         return;
       }
 
@@ -537,8 +537,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   ): void {
     // ATR-based SL/TP (1×ATR SL, 2×ATR target → 1:2 R:R)
     // Falls back to 0.25% / 0.5% fixed if ATR is not yet cached
-    const stopLoss = atr ? ltp - atr       : ltp * (1 - 0.0025);
-    const target   = atr ? ltp + atr * 2   : ltp * (1 + 0.005);
+    const stopLoss = atr ? ltp - atr : ltp * (1 - 0.0025);
+    const target = atr ? ltp + atr * 2 : ltp * (1 + 0.005);
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -589,8 +589,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
   ): void {
     // ATR-based SL/TP (1×ATR SL, 2×ATR target → 1:2 R:R)
     // Falls back to 0.25% / 0.5% fixed if ATR is not yet cached
-    const stopLoss = atr ? ltp + atr       : ltp * (1 + 0.0025);
-    const target   = atr ? ltp - atr * 2   : ltp * (1 - 0.005);
+    const stopLoss = atr ? ltp + atr : ltp * (1 + 0.0025);
+    const target = atr ? ltp - atr * 2 : ltp * (1 - 0.005);
 
     // Get symbol-specific margin multiplier
     const marginMultiplier = getSymbolMarginMultiplier(symbol);
@@ -747,18 +747,18 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       if (state.prevLtp === 0 && state.dayHigh === 0) continue; // not yet initialized
       const ltp = state.prevLtp;
       const distToHigh = state.dayHigh > 0 ? ((state.dayHigh - ltp) / ltp) * 100 : 0;
-      const distToLow  = state.dayLow !== Infinity ? ((ltp - state.dayLow) / ltp) * 100 : 0;
+      const distToLow = state.dayLow !== Infinity ? ((ltp - state.dayLow) / ltp) * 100 : 0;
       result.push({
         symbol,
         ltp,
         open: state.open,
         dayHigh: state.dayHigh,
-        dayLow:  state.dayLow === Infinity ? 0 : state.dayLow,
+        dayLow: state.dayLow === Infinity ? 0 : state.dayLow,
         distToHigh,
         distToLow,
-        trend:    this.cachedTrends.get(symbol) ?? 'NEUTRAL',
-        adx:      this.cachedADXs.get(symbol),
-        rsi:      this.cachedRSIs.get(symbol),
+        trend: this.cachedTrends.get(symbol) ?? 'NEUTRAL',
+        adx: this.cachedADXs.get(symbol),
+        rsi: this.cachedRSIs.get(symbol),
         volRatio: this.cachedVolumeRatios.get(symbol),
         isInCooldown: state.isInCooldown,
         tradesExecutedToday: state.tradesExecutedToday,

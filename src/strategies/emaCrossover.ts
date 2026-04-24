@@ -150,9 +150,9 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if (crossDirection === 'BUY'  && trend !== 'UP')  return;
     if (crossDirection === 'SELL' && trend !== 'DOWN') return;
 
-    // Volume must confirm (1.3× minimum)
-    if (volRatio > 0 && volRatio < 1.3) {
-      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x < 1.3x)`);
+    // Volume must confirm (0.5× minimum — filters only near-zero/halted volume)
+    if (volRatio > 0 && volRatio < 0.5) {
+      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — volume too low (${volRatio.toFixed(2)}x < 0.5x)`);
       return;
     }
 

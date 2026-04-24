@@ -134,8 +134,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
         logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
         return;
       }
-      if (volRatio > 0 && volRatio < 1.3) {
-        logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
+      if (volRatio > 0 && volRatio < 0.5) {
+        logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);
         return;
       }
       const confidence = this.scoreConfidence(curr, trend, 'BUY', volRatio);
@@ -145,8 +145,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
         logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
         return;
       }
-      if (volRatio > 0 && volRatio < 1.3) {
-        logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
+      if (volRatio > 0 && volRatio < 0.5) {
+        logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);
         return;
       }
       const confidence = this.scoreConfidence(curr, trend, 'SELL', volRatio);

@@ -71,13 +71,13 @@ function s1_rsiMacdScalp(candles: Candle[], price: number): Vote {
   const slDist = Math.max(atr * 1.0, price * 0.003);
   const tpDist = Math.max(atr * 2.0, price * 0.006);
 
-  if (rsi < 35 && crossUp && price > latestEMA9 && volRatio >= 1.0) {
+  if (rsi < 35 && crossUp && price > latestEMA9 && volRatio >= 0.5) {
     return {
       direction: 'BUY', slDist, tpDist,
       reason: `S1 BUY: RSI=${rsi.toFixed(1)}<35 MACD↑ price>EMA9 vol=${volRatio.toFixed(2)}x`,
     };
   }
-  if (rsi > 65 && crossDn && price < latestEMA9 && volRatio >= 1.0) {
+  if (rsi > 65 && crossDn && price < latestEMA9 && volRatio >= 0.5) {
     return {
       direction: 'SELL', slDist, tpDist,
       reason: `S1 SELL: RSI=${rsi.toFixed(1)}>65 MACD↓ price<EMA9 vol=${volRatio.toFixed(2)}x`,
@@ -124,8 +124,8 @@ function s2_breakoutRetest(candles: Candle[], price: number): Vote {
   const tpDist = Math.max(slDist * 2.5, price * 0.0075);
 
   if (current.close > resistance) {
-    if (volRatio < 1.5) {
-      return N(`S2: breakout above ${resistance.toFixed(2)} but low volume (${volRatio.toFixed(2)}x)`);
+    if (volRatio < 0.5) {
+      return N(`S2: breakout above ${resistance.toFixed(2)} but near-zero volume (${volRatio.toFixed(2)}x)`);
     }
     const wickRetest  = current.low  <= resistance + retestTolerance;
     const priorRetest = prev
@@ -141,8 +141,8 @@ function s2_breakoutRetest(candles: Candle[], price: number): Vote {
   }
 
   if (current.close < support) {
-    if (volRatio < 1.5) {
-      return N(`S2: breakdown below ${support.toFixed(2)} but low volume (${volRatio.toFixed(2)}x)`);
+    if (volRatio < 0.5) {
+      return N(`S2: breakdown below ${support.toFixed(2)} but near-zero volume (${volRatio.toFixed(2)}x)`);
     }
     const wickRetest  = current.high >= support - retestTolerance;
     const priorRetest = prev
