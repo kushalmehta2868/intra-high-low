@@ -471,26 +471,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
       if (trend !== 'UP') {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — 30-min trend is ${trend}`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'BUY', pattern: 'Day High Breakout',
-          blockedBy: `Trend=${trend} (need UP)`,
-          details: { trend, adx: adx?.toFixed(1) ?? 'N/A', rsi: rsi?.toFixed(1) ?? 'N/A', vol: `${(this.cachedVolumeRatios.get(data.symbol) ?? 0).toFixed(2)}x`, ltp: ltp.toFixed(2), dayHigh: dayHigh.toFixed(2) } });
         return;
       }
 
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'BUY', pattern: 'Day High Breakout',
-          blockedBy: `Volume too low (${volRatio.toFixed(2)}x < 1.5x)`,
-          details: { vol: `${volRatio.toFixed(2)}x`, trend, adx: adx?.toFixed(1) ?? 'N/A', rsi: rsi?.toFixed(1) ?? 'N/A', ltp: ltp.toFixed(2), dayHigh: dayHigh.toFixed(2) } });
         return;
       }
 
       if (rsi !== undefined && rsi >= 70) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — RSI overbought (${rsi.toFixed(1)})`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'BUY', pattern: 'Day High Breakout',
-          blockedBy: `RSI overbought (${rsi.toFixed(1)} ≥ 70)`,
-          details: { rsi: rsi.toFixed(1), trend, adx: adx?.toFixed(1) ?? 'N/A', vol: `${volRatio.toFixed(2)}x`, ltp: ltp.toFixed(2), dayHigh: dayHigh.toFixed(2) } });
         return;
       }
 
@@ -509,26 +500,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     if (crossedBelowLow && !state.hasBrokenLowToday) {
       if (trend !== 'DOWN') {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — 30-min trend is ${trend}`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'SELL', pattern: 'Day Low Breakout',
-          blockedBy: `Trend=${trend} (need DOWN)`,
-          details: { trend, adx: adx?.toFixed(1) ?? 'N/A', rsi: rsi?.toFixed(1) ?? 'N/A', vol: `${(this.cachedVolumeRatios.get(data.symbol) ?? 0).toFixed(2)}x`, ltp: ltp.toFixed(2), dayLow: dayLow.toFixed(2) } });
         return;
       }
 
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 1.5) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — volume ${volRatio.toFixed(2)}x < 1.5x`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'SELL', pattern: 'Day Low Breakout',
-          blockedBy: `Volume too low (${volRatio.toFixed(2)}x < 1.5x)`,
-          details: { vol: `${volRatio.toFixed(2)}x`, trend, adx: adx?.toFixed(1) ?? 'N/A', rsi: rsi?.toFixed(1) ?? 'N/A', ltp: ltp.toFixed(2), dayLow: dayLow.toFixed(2) } });
         return;
       }
 
       if (rsi !== undefined && rsi <= 30) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — RSI oversold (${rsi.toFixed(1)})`);
-        this.emitRejectedSignal({ symbol: data.symbol, action: 'SELL', pattern: 'Day Low Breakout',
-          blockedBy: `RSI oversold (${rsi.toFixed(1)} ≤ 30)`,
-          details: { rsi: rsi.toFixed(1), trend, adx: adx?.toFixed(1) ?? 'N/A', vol: `${volRatio.toFixed(2)}x`, ltp: ltp.toFixed(2), dayLow: dayLow.toFixed(2) } });
         return;
       }
 

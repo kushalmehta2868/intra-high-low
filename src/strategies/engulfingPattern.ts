@@ -70,7 +70,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     this.resetIfNewDay(state);
     if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
 
-    // No new entries after 15:00 IST — not enough time to reach target
+    // Skip opening volatility window and end-of-day
+    if (this.isBeforeSignalStart()) return;
     if (this.isAfterMarketCutoff()) return;
 
     const { tenMin, thirtyMin } = bundle;
@@ -128,46 +129,24 @@ export class EngulfingPatternStrategy extends BaseStrategy {
       isBullishEngulf ? 'BULLISH' : isBearishEngulf ? 'BEARISH' : 'NONE';
     this.snapshots.set(symbol, { symbol, trend, adx: adxValue, volRatio, lastPattern: detectedPattern, tradesExecutedToday: state.tradesExecutedToday });
 
-    const baseDetails = {
-      trend, adx: adxValue?.toFixed(1) ?? 'N/A',
-      vol: volRatio !== undefined ? `${volRatio.toFixed(2)}x` : 'N/A',
-      rsi: rsi !== null ? rsi.toFixed(1) : 'N/A',
-    };
-
-    if (isBullishEngulf && trend !== 'UP') {
-      this.emitRejectedSignal({ symbol, action: 'BUY', pattern: 'Bullish Engulfing',
-        blockedBy: `Trend=${trend} (need UP)`, details: baseDetails });
-    } else if (isBullishEngulf && trend === 'UP') {
+    if (isBullishEngulf && trend === 'UP') {
       if (rsi !== null && rsi >= 70) {
         logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — RSI overbought (${rsi.toFixed(1)})`);
-        this.emitRejectedSignal({ symbol, action: 'BUY', pattern: 'Bullish Engulfing',
-          blockedBy: `RSI overbought (${rsi.toFixed(1)} ≥ 70)`, details: baseDetails });
         return;
       }
       if (volRatio > 0 && volRatio < 1.3) {
         logger.info(`[EngulfingPattern] BUY engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
-        this.emitRejectedSignal({ symbol, action: 'BUY', pattern: 'Bullish Engulfing',
-          blockedBy: `Volume too low (${volRatio.toFixed(2)}x < 1.3x)`, details: baseDetails });
         return;
       }
       const confidence = this.scoreConfidence(curr, trend, 'BUY', volRatio);
       this.emitEngulfSignal(symbol, 'BUY', ltp || curr.close, atr, confidence, state);
-    }
-
-    if (isBearishEngulf && trend !== 'DOWN') {
-      this.emitRejectedSignal({ symbol, action: 'SELL', pattern: 'Bearish Engulfing',
-        blockedBy: `Trend=${trend} (need DOWN)`, details: baseDetails });
     } else if (isBearishEngulf && trend === 'DOWN') {
       if (rsi !== null && rsi <= 30) {
         logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — RSI oversold (${rsi.toFixed(1)})`);
-        this.emitRejectedSignal({ symbol, action: 'SELL', pattern: 'Bearish Engulfing',
-          blockedBy: `RSI oversold (${rsi.toFixed(1)} ≤ 30)`, details: baseDetails });
         return;
       }
       if (volRatio > 0 && volRatio < 1.3) {
         logger.info(`[EngulfingPattern] SELL engulf on ${symbol} rejected — volume ${volRatio.toFixed(2)}x < 1.3x`);
-        this.emitRejectedSignal({ symbol, action: 'SELL', pattern: 'Bearish Engulfing',
-          blockedBy: `Volume too low (${volRatio.toFixed(2)}x < 1.3x)`, details: baseDetails });
         return;
       }
       const confidence = this.scoreConfidence(curr, trend, 'SELL', volRatio);
@@ -268,6 +247,12 @@ export class EngulfingPatternStrategy extends BaseStrategy {
   private isAfterMarketCutoff(): boolean {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     return istNow.getHours() >= 15;
+  }
+
+  /** Returns true before 09:30 IST — skip opening volatility window. */
+  private isBeforeSignalStart(): boolean {
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return istNow.getHours() < 9 || (istNow.getHours() === 9 && istNow.getMinutes() < 30);
   }
 
   public getSnapshot(): EngulfingSnapshot[] {

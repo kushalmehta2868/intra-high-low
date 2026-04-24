@@ -284,6 +284,97 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     await this.sendMessage(message);
   }
 
+  public async sendLiveStatus(data: {
+    mode: string;
+    balance: number;
+    startingBalance: number;
+    openPositions: Array<{
+      symbol: string;
+      type: string;
+      quantity: number;
+      entryPrice: number;
+      currentPrice: number;
+      pnl: number;
+      pnlPercent: number;
+      stopLoss?: number;
+      target?: number;
+      entryTime: Date;
+    }>;
+    dailyPnL: number;
+    totalTrades: number;
+    winningTrades: number;
+    losingTrades: number;
+    winRate: number;
+    dailyLossPercent: number;
+    maxDailyLossPercent: number;
+  }): Promise<void> {
+    const timeStr = new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
+    });
+
+    const unrealizedPnL = data.openPositions.reduce((sum, p) => sum + p.pnl, 0);
+    const totalPnL      = data.dailyPnL + unrealizedPnL;
+    const returnPct     = data.startingBalance > 0 ? ((totalPnL / data.startingBalance) * 100) : 0;
+    const balancePct    = data.startingBalance > 0 ? (((data.balance - data.startingBalance) / data.startingBalance) * 100) : 0;
+    const riskUsedPct   = data.dailyLossPercent.toFixed(2);
+    const riskLeftPct   = Math.max(0, data.maxDailyLossPercent - data.dailyLossPercent).toFixed(2);
+    const riskBar       = data.maxDailyLossPercent > 0
+      ? Math.min(10, Math.round((data.dailyLossPercent / data.maxDailyLossPercent) * 10))
+      : 0;
+    const riskFill = '█'.repeat(riskBar) + '░'.repeat(10 - riskBar);
+
+    let msg = `📊 *LIVE STATUS* — ${timeStr} IST\n`;
+    msg += `\`${data.mode}\`\n`;
+    msg += `${'━'.repeat(28)}\n\n`;
+
+    // Balance
+    msg += `💰 *Balance*\n`;
+    msg += `Current: ₹${data.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}\n`;
+    msg += `Start:   ₹${data.startingBalance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    msg += `  (${balancePct >= 0 ? '+' : ''}${balancePct.toFixed(2)}%)\n\n`;
+
+    // PnL
+    const pnlSign = totalPnL >= 0 ? '✅' : '❌';
+    msg += `${pnlSign} *P&L Today*\n`;
+    msg += `Realized:   ₹${data.dailyPnL >= 0 ? '+' : ''}${data.dailyPnL.toLocaleString('en-IN', { maximumFractionDigits: 0 })}\n`;
+    msg += `Unrealized: ₹${unrealizedPnL >= 0 ? '+' : ''}${unrealizedPnL.toLocaleString('en-IN', { maximumFractionDigits: 0 })}\n`;
+    msg += `Total:      ₹${totalPnL >= 0 ? '+' : ''}${totalPnL.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%)\n\n`;
+
+    // Trade stats
+    msg += `📈 *Trades Today*\n`;
+    msg += `Closed: ${data.totalTrades}  ✅ ${data.winningTrades}W  ❌ ${data.losingTrades}L`;
+    if (data.totalTrades > 0) msg += `  WR: ${data.winRate.toFixed(0)}%`;
+    msg += `\n`;
+    msg += `Open:   ${data.openPositions.length} position${data.openPositions.length !== 1 ? 's' : ''}\n\n`;
+
+    // Open positions
+    if (data.openPositions.length > 0) {
+      msg += `${'─'.repeat(28)}\n`;
+      msg += `📂 *Open Positions*\n`;
+      for (const p of data.openPositions) {
+        const pnlE   = p.pnl >= 0 ? '🟢' : '🔴';
+        const typeE  = p.type === 'LONG' ? '▲' : '▼';
+        const held   = Math.round((Date.now() - p.entryTime.getTime()) / 60000);
+        const heldStr = held >= 60 ? `${Math.floor(held/60)}h${held%60}m` : `${held}m`;
+        msg += `\n${pnlE} *${p.symbol.replace('-EQ', '')}* ${typeE} ×${p.quantity}  ⏱${heldStr}\n`;
+        msg += `  Entry ₹${p.entryPrice.toFixed(2)} → LTP ₹${p.currentPrice.toFixed(2)}\n`;
+        msg += `  PnL: ₹${p.pnl >= 0 ? '+' : ''}${p.pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${p.pnlPercent >= 0 ? '+' : ''}${p.pnlPercent.toFixed(2)}%)\n`;
+        if (p.stopLoss)  msg += `  SL ₹${p.stopLoss.toFixed(2)}`;
+        if (p.target)    msg += `  TP ₹${p.target.toFixed(2)}`;
+        if (p.stopLoss || p.target) msg += `\n`;
+      }
+      msg += `\n`;
+    }
+
+    // Risk meter
+    msg += `${'─'.repeat(28)}\n`;
+    msg += `⚠️ *Risk*\n`;
+    msg += `\`${riskFill}\` ${riskUsedPct}% used\n`;
+    msg += `Daily loss: ${riskUsedPct}%  /  limit: ${data.maxDailyLossPercent}%  (${riskLeftPct}% left)\n`;
+
+    await this.sendMessage(msg);
+  }
+
   public async sendDailySummary(data: {
     dailyPnL: number;
     totalTrades: number;
@@ -356,308 +447,6 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     message += `\n🕐 Report generated at ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`;
 
     await this.sendMessage(message);
-  }
-
-  public async sendMarketSnapshot(
-    strategyName: string,
-    snapshots: Array<{
-      symbol: string;
-      ltp: number;
-      open: number;
-      dayHigh: number;
-      dayLow: number;
-      distToHigh: number;
-      distToLow: number;
-      trend: string;
-      adx: number | undefined;
-      rsi: number | undefined;
-      volRatio: number | undefined;
-      isInCooldown: boolean;
-      tradesExecutedToday: number;
-    }>
-  ): Promise<void> {
-    if (snapshots.length === 0) return;
-
-    const timeStr = new Date().toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    const trendEmoji = (t: string) => t === 'UP' ? '🟢' : t === 'DOWN' ? '🔴' : '⚪';
-    const filtersOk = (s: typeof snapshots[0]) =>
-      s.trend !== 'NEUTRAL' &&
-      (s.adx === undefined || s.adx >= 15) &&
-      (s.volRatio === undefined || s.volRatio >= 1.5);
-
-    const total = snapshots.filter(s => s.ltp > 0).length;
-
-    // Filter stats
-    const trendUp      = snapshots.filter(s => s.trend === 'UP').length;
-    const trendDown    = snapshots.filter(s => s.trend === 'DOWN').length;
-    const trendNeutral = snapshots.filter(s => s.trend === 'NEUTRAL').length;
-
-    const adxLoaded  = snapshots.filter(s => s.adx !== undefined);
-    const adxPass    = adxLoaded.filter(s => s.adx! >= 15).length;
-    const adxFail    = adxLoaded.filter(s => s.adx! < 15);
-    const adxAvgGap  = adxFail.length > 0
-      ? adxFail.reduce((sum, s) => sum + (15 - s.adx!), 0) / adxFail.length
-      : 0;
-
-    const volLoaded  = snapshots.filter(s => s.volRatio !== undefined);
-    const volPass    = volLoaded.filter(s => s.volRatio! >= 1.5).length;
-    const volFail    = volLoaded.filter(s => s.volRatio! < 1.5);
-    const volAvgGap  = volFail.length > 0
-      ? volFail.reduce((sum, s) => sum + (1.5 - s.volRatio!), 0) / volFail.length
-      : 0;
-
-    const readyCount = snapshots.filter(filtersOk).length;
-    const nearCount  = snapshots.filter(s => Math.min(s.distToHigh, s.distToLow) < 0.7).length;
-
-    // Build stats block (sent once before symbol pages)
-    let statsMsg = `📊 *${strategyName}*\n`;
-    statsMsg += `🕐 ${timeStr} IST  •  ${total} symbols\n`;
-    statsMsg += `${'─'.repeat(30)}\n`;
-    statsMsg += `*Filter Status*\n`;
-    statsMsg += `🟢 Trend UP: ${trendUp}  🔴 DOWN: ${trendDown}  ⚪ Neutral: ${trendNeutral}/${total}\n`;
-    statsMsg += `📈 ADX≥15:  ${adxPass}/${adxLoaded.length} pass`;
-    if (adxFail.length > 0) statsMsg += `  (failing avg gap: +${adxAvgGap.toFixed(1)})`;
-    statsMsg += `\n`;
-    statsMsg += `📦 Vol≥1.5x: ${volPass}/${volLoaded.length} pass`;
-    if (volFail.length > 0) statsMsg += `  (failing avg gap: +${volAvgGap.toFixed(2)}x)`;
-    statsMsg += `\n`;
-    statsMsg += `${'─'.repeat(30)}\n`;
-    statsMsg += `✅ All filters ready: *${readyCount}/${total}*\n`;
-    statsMsg += `⚡ Near breakout (<0.7%): *${nearCount}/${total}*\n`;
-    statsMsg += `🔥 Near breakout (<0.3%): *${snapshots.filter(s => Math.min(s.distToHigh, s.distToLow) < 0.3).length}/${total}*`;
-
-    await this.sendMessage(statsMsg);
-
-    // Chunk into groups of 15 symbols per message (keeps each under 4096 chars)
-    const CHUNK = 15;
-    for (let i = 0; i < snapshots.length; i += CHUNK) {
-      const chunk = snapshots.slice(i, i + CHUNK);
-      const pageNum    = Math.floor(i / CHUNK) + 1;
-      const totalPages = Math.ceil(snapshots.length / CHUNK);
-
-      let msg = `📊 *${strategyName}* — Symbols (${pageNum}/${totalPages})\n`;
-      msg += `${'─'.repeat(30)}\n`;
-
-      for (const s of chunk) {
-        if (s.ltp === 0) continue;
-        const near    = Math.min(s.distToHigh, s.distToLow);
-        const nearTag = near < 0.3 ? ' 🔥' : near < 0.7 ? ' ⚡' : '';
-        const coolTag = s.isInCooldown ? ' 🔒' : '';
-        const readyTag = filtersOk(s) ? ' ✅' : '';
-
-        const adxStr = s.adx !== undefined
-          ? (s.adx >= 15 ? `${s.adx.toFixed(0)} ✅` : `${s.adx.toFixed(0)} (need +${(15 - s.adx).toFixed(0)})`)
-          : '--';
-        const rsiStr = s.rsi !== undefined
-          ? (s.rsi >= 30 && s.rsi <= 70 ? `${s.rsi.toFixed(0)} ✅` : s.rsi > 70 ? `${s.rsi.toFixed(0)} (OB, -${(s.rsi - 70).toFixed(0)})` : `${s.rsi.toFixed(0)} (OS, +${(30 - s.rsi).toFixed(0)})`)
-          : '--';
-        const volStr = s.volRatio !== undefined
-          ? (s.volRatio >= 1.5 ? `${s.volRatio.toFixed(1)}x ✅` : `${s.volRatio.toFixed(1)}x (need +${(1.5 - s.volRatio).toFixed(1)}x)`)
-          : '--';
-
-        const rupToHigh = (s.dayHigh - s.ltp).toFixed(0);
-        const rupToLow  = (s.ltp - s.dayLow).toFixed(0);
-
-        msg += `\n*${s.symbol.replace('-EQ', '')}*${nearTag}${coolTag}${readyTag}\n`;
-        msg += `  ₹${s.ltp.toFixed(0)}  H:${s.dayHigh.toFixed(0)} L:${s.dayLow.toFixed(0)}\n`;
-        msg += `  ↑₹${rupToHigh} (${s.distToHigh.toFixed(1)}%) to high\n`;
-        msg += `  ↓₹${rupToLow} (${s.distToLow.toFixed(1)}%) to low\n`;
-        msg += `  ${trendEmoji(s.trend)} ${s.trend}  ADX:${adxStr}  RSI:${rsiStr}  Vol:${volStr}\n`;
-      }
-
-      await this.sendMessage(msg);
-    }
-  }
-
-  public async sendEngulfingSnapshot(
-    snapshots: Array<{
-      symbol: string;
-      trend: string;
-      adx: number | undefined;
-      volRatio: number | undefined;
-      lastPattern: 'BULLISH' | 'BEARISH' | 'NONE';
-      tradesExecutedToday: number;
-    }>
-  ): Promise<void> {
-    if (snapshots.length === 0) return;
-
-    const timeStr = new Date().toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
-    });
-
-    const bullish = snapshots.filter(s => s.lastPattern === 'BULLISH').length;
-    const bearish = snapshots.filter(s => s.lastPattern === 'BEARISH').length;
-    const adxPass = snapshots.filter(s => s.adx !== undefined && s.adx >= 20).length;
-    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.3).length;
-    const upTrend = snapshots.filter(s => s.trend === 'UP').length;
-    const dnTrend = snapshots.filter(s => s.trend === 'DOWN').length;
-
-    let msg = `🕯 *EngulfingPattern* — ${timeStr} IST\n`;
-    msg += `${'─'.repeat(28)}\n`;
-    msg += `🟢 UP: ${upTrend}  🔴 DOWN: ${dnTrend}  ⚪ Flat: ${snapshots.length - upTrend - dnTrend}\n`;
-    msg += `📈 ADX≥20: ${adxPass}/${snapshots.filter(s => s.adx !== undefined).length}\n`;
-    msg += `📦 Vol≥1.3x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
-    msg += `🕯 Bullish: ${bullish}  🕯 Bearish: ${bearish}\n`;
-    msg += `${'─'.repeat(28)}\n`;
-
-    const CHUNK = 20;
-    for (let i = 0; i < snapshots.length; i += CHUNK) {
-      const chunk = snapshots.slice(i, i + CHUNK);
-      let chunkMsg = i === 0 ? msg : '';
-      for (const s of chunk) {
-        const trendE = s.trend === 'UP' ? '🟢' : s.trend === 'DOWN' ? '🔴' : '⚪';
-        const adxStr = s.adx !== undefined
-          ? (s.adx >= 20 ? `${s.adx.toFixed(0)}✅` : `${s.adx.toFixed(0)}(+${(20 - s.adx).toFixed(0)})`)
-          : '--';
-        const volStr = s.volRatio !== undefined
-          ? (s.volRatio >= 1.3 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.3 - s.volRatio).toFixed(1)}x)`)
-          : '--';
-        const patE = s.lastPattern === 'BULLISH' ? '🟩' : s.lastPattern === 'BEARISH' ? '🟥' : '⬜';
-        const trades = s.tradesExecutedToday > 0 ? ` [${s.tradesExecutedToday}/2]` : '';
-        chunkMsg += `${patE}${trendE} *${s.symbol.replace('-EQ', '')}*${trades}  ADX:${adxStr}  Vol:${volStr}\n`;
-      }
-      await this.sendMessage(chunkMsg);
-      msg = '';
-    }
-  }
-
-  public async sendEMASnapshot(
-    snapshots: Array<{
-      symbol: string;
-      trend: string;
-      adx: number | undefined;
-      ema9: number | undefined;
-      ema21: number | undefined;
-      emaGapPct: number | undefined;
-      volRatio: number | undefined;
-      crossover: 'BUY' | 'SELL' | 'NONE';
-      tradesExecutedToday: number;
-    }>
-  ): Promise<void> {
-    if (snapshots.length === 0) return;
-
-    const timeStr = new Date().toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
-    });
-
-    const buyX  = snapshots.filter(s => s.crossover === 'BUY').length;
-    const sellX = snapshots.filter(s => s.crossover === 'SELL').length;
-    const adxPass = snapshots.filter(s => s.adx !== undefined && s.adx >= 20).length;
-    const volPass = snapshots.filter(s => s.volRatio !== undefined && s.volRatio >= 1.3).length;
-    const upTrend = snapshots.filter(s => s.trend === 'UP').length;
-    const dnTrend = snapshots.filter(s => s.trend === 'DOWN').length;
-
-    let msg = `📉 *EMACrossover* — ${timeStr} IST\n`;
-    msg += `${'─'.repeat(28)}\n`;
-    msg += `🟢 UP: ${upTrend}  🔴 DOWN: ${dnTrend}  ⚪ Flat: ${snapshots.length - upTrend - dnTrend}\n`;
-    msg += `📈 ADX≥20: ${adxPass}/${snapshots.filter(s => s.adx !== undefined).length}\n`;
-    msg += `📦 Vol≥1.3x: ${volPass}/${snapshots.filter(s => s.volRatio !== undefined).length}\n`;
-    msg += `📊 Cross BUY: ${buyX}  SELL: ${sellX}\n`;
-    msg += `${'─'.repeat(28)}\n`;
-
-    const CHUNK = 20;
-    for (let i = 0; i < snapshots.length; i += CHUNK) {
-      const chunk = snapshots.slice(i, i + CHUNK);
-      let chunkMsg = i === 0 ? msg : '';
-      for (const s of chunk) {
-        const trendE = s.trend === 'UP' ? '🟢' : s.trend === 'DOWN' ? '🔴' : '⚪';
-        const crossE = s.crossover === 'BUY' ? '⬆️' : s.crossover === 'SELL' ? '⬇️' : '➡️';
-        const adxStr = s.adx !== undefined
-          ? (s.adx >= 20 ? `${s.adx.toFixed(0)}✅` : `${s.adx.toFixed(0)}(+${(20 - s.adx).toFixed(0)})`)
-          : '--';
-        const volStr = s.volRatio !== undefined
-          ? (s.volRatio >= 1.3 ? `${s.volRatio.toFixed(1)}x✅` : `${s.volRatio.toFixed(1)}x(+${(1.3 - s.volRatio).toFixed(1)}x)`)
-          : '--';
-        const gapStr = s.emaGapPct !== undefined ? `gap:${s.emaGapPct > 0 ? '+' : ''}${s.emaGapPct.toFixed(2)}%` : '';
-        const trades = s.tradesExecutedToday > 0 ? ` [${s.tradesExecutedToday}/2]` : '';
-        chunkMsg += `${crossE}${trendE} *${s.symbol.replace('-EQ', '')}*${trades}  ${gapStr}  ADX:${adxStr}  Vol:${volStr}\n`;
-      }
-      await this.sendMessage(chunkMsg);
-      msg = '';
-    }
-  }
-
-  public async sendConfluenceSnapshot(
-    snapshots: Array<{
-      symbol: string;
-      adx: number | undefined;
-      s1: 'BUY' | 'SELL' | 'NEUTRAL';
-      s2: 'BUY' | 'SELL' | 'NEUTRAL';
-      s3: 'BUY' | 'SELL' | 'NEUTRAL';
-      buyVotes: number;
-      sellVotes: number;
-      tradesExecutedToday: number;
-    }>
-  ): Promise<void> {
-    if (snapshots.length === 0) return;
-
-    const timeStr = new Date().toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
-    });
-
-    const ready    = snapshots.filter(s => s.buyVotes >= 2 || s.sellVotes >= 2).length;
-    const partial  = snapshots.filter(s => s.buyVotes === 1 || s.sellVotes === 1).length;
-    const adxPass  = snapshots.filter(s => s.adx !== undefined && s.adx >= 20).length;
-
-    let msg = `🔀 *Confluence* — ${timeStr} IST\n`;
-    msg += `${'─'.repeat(28)}\n`;
-    msg += `📈 ADX≥20: ${adxPass}/${snapshots.filter(s => s.adx !== undefined).length}\n`;
-    msg += `✅ ≥2/3 votes: ${ready}  📌 1/3: ${partial}\n`;
-    msg += `${'─'.repeat(28)}\n`;
-
-    const voteE = (v: 'BUY' | 'SELL' | 'NEUTRAL') => v === 'BUY' ? '🟢' : v === 'SELL' ? '🔴' : '⚪';
-
-    const CHUNK = 20;
-    for (let i = 0; i < snapshots.length; i += CHUNK) {
-      const chunk = snapshots.slice(i, i + CHUNK);
-      let chunkMsg = i === 0 ? msg : '';
-      for (const s of chunk) {
-        const adxStr = s.adx !== undefined
-          ? (s.adx >= 20 ? `${s.adx.toFixed(0)}✅` : `${s.adx.toFixed(0)}(+${(20 - s.adx).toFixed(0)})`)
-          : '--';
-        const votes = `S1:${voteE(s.s1)} S2:${voteE(s.s2)} S3:${voteE(s.s3)}`;
-        const total = s.buyVotes >= 2 ? ` ✅${s.buyVotes}BUY` : s.sellVotes >= 2 ? ` ✅${s.sellVotes}SELL` : ` (${Math.max(s.buyVotes, s.sellVotes)}/3)`;
-        const trades = s.tradesExecutedToday > 0 ? ` [${s.tradesExecutedToday}/2]` : '';
-        chunkMsg += `*${s.symbol.replace('-EQ', '')}*${total}${trades}  ${votes}  ADX:${adxStr}\n`;
-      }
-      await this.sendMessage(chunkMsg);
-      msg = '';
-    }
-  }
-
-  public async sendMissedSignal(data: {
-    symbol: string;
-    strategy: string;
-    action: 'BUY' | 'SELL';
-    pattern: string;
-    blockedBy: string;
-    details: Record<string, string | number>;
-  }): Promise<void> {
-    const actionEmoji = data.action === 'BUY' ? '🟢' : '🔴';
-    const timeStr = new Date().toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit',
-    });
-
-    let msg = `⚠️ *MISSED SIGNAL* — ${data.strategy}\n`;
-    msg += `🕐 ${timeStr} IST\n`;
-    msg += `${'─'.repeat(28)}\n`;
-    msg += `${actionEmoji} *${data.action}* on \`${data.symbol.replace('-EQ', '')}\`\n`;
-    msg += `📌 Pattern: ${data.pattern}\n`;
-    msg += `🚫 Blocked by: *${data.blockedBy}*\n`;
-
-    if (Object.keys(data.details).length > 0) {
-      msg += `${'─'.repeat(28)}\n`;
-      for (const [k, v] of Object.entries(data.details)) {
-        msg += `• ${k}: ${v}\n`;
-      }
-    }
-
-    await this.sendMessage(msg);
   }
 
   public async start(): Promise<void> {

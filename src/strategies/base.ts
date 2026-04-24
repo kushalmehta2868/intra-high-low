@@ -1,15 +1,6 @@
 import { EventEmitter } from 'events';
 import { StrategySignal, StrategyContext, MarketData, Position } from '../types';
 
-export interface RejectedSignal {
-  symbol: string;
-  strategy: string;
-  action: 'BUY' | 'SELL';
-  pattern: string;
-  blockedBy: string;
-  details: Record<string, string | number>;
-}
-
 export interface IStrategy extends EventEmitter {
   getName(): string;
   initialize(): Promise<void>;
@@ -21,7 +12,6 @@ export interface IStrategy extends EventEmitter {
 
   on(event: 'signal', listener: (signal: StrategySignal) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
-  on(event: 'rejected_signal', listener: (signal: RejectedSignal) => void): this;
 }
 
 export abstract class BaseStrategy extends EventEmitter implements IStrategy {
@@ -55,12 +45,6 @@ export abstract class BaseStrategy extends EventEmitter implements IStrategy {
   protected emitSignal(signal: StrategySignal): void {
     if (this.isActive) {
       this.emit('signal', signal);
-    }
-  }
-
-  protected emitRejectedSignal(signal: Omit<RejectedSignal, 'strategy'>): void {
-    if (this.isActive) {
-      this.emit('rejected_signal', { ...signal, strategy: this.name });
     }
   }
 

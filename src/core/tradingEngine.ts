@@ -5,7 +5,7 @@ import { PaperBroker } from "../brokers/paper/broker";
 import { RiskManager } from "../risk/riskManager";
 import { PositionManager } from "./positionManager";
 import { MarketScheduler } from "./scheduler";
-import { IStrategy, RejectedSignal } from "../strategies/base";
+import { IStrategy } from "../strategies/base";
 import { TradingTelegramBot } from "../telegram/bot";
 import {
   AppConfig,
@@ -76,12 +76,12 @@ export class TradingEngine extends EventEmitter {
   // Dashboard display interval
   private dashboardDisplayInterval?: NodeJS.Timeout;
 
-  // Market snapshot broadcast interval (every 15 minutes)
-  private marketSnapshotInterval?: NodeJS.Timeout;
-
   // Background reconnection
   private reconnectionInterval?: NodeJS.Timeout;
   private readonly RECONNECTION_INTERVAL_MS = 60 * 1000; // Try reconnecting every 1 minute
+
+  // Live status broadcast interval (every 15 minutes during market hours)
+  private liveStatusInterval?: NodeJS.Timeout;
 
   constructor(config: AppConfig, watchlist?: string[], initialCapital?: number) {
     super();
@@ -399,11 +399,6 @@ export class TradingEngine extends EventEmitter {
         );
     });
 
-    strategy.on("rejected_signal", (signal: RejectedSignal) => {
-      this.telegramBot
-        .sendMissedSignal(signal)
-        .catch((err) => logger.error("Failed to send missed signal notification", err));
-    });
 
     this.strategies.set(strategy.getName(), strategy);
     logger.info("Strategy added", { name: strategy.getName() });
@@ -1145,57 +1140,60 @@ export class TradingEngine extends EventEmitter {
       logger.info('✅ CandleDataService started');
     }
 
-    // Start 15-minute market snapshot broadcast (only one interval at a time)
-    if (!this.marketSnapshotInterval) {
-      const sendSnapshot = async () => {
-        const all = [...this.strategies.values()];
+    // Start 15-minute live status broadcast
+    if (!this.liveStatusInterval) {
+      this.liveStatusInterval = setInterval(() => this.sendLiveStatusNow(), 15 * 60 * 1000);
+      logger.info('✅ Live status broadcast started (every 15 min)');
+      this.sendLiveStatusNow(); // send one immediately
+    }
+  }
 
-        const breakoutStrategy = all.find(s => s instanceof DayHighLowBreakoutStrategy) as DayHighLowBreakoutStrategy | undefined;
-        if (breakoutStrategy) {
-          const snapshots = breakoutStrategy.getMarketSnapshot();
-          await this.telegramBot.sendMarketSnapshot(breakoutStrategy.getName(), snapshots).catch(err =>
-            logger.error('Failed to send DayHighLow snapshot', { error: err.message })
-          );
-        }
+  private async sendLiveStatusNow(): Promise<void> {
+    try {
+      await this.positionManager.updateMarketPrices();
+      const balance   = await this.broker.getAccountBalance();
+      const positions = this.positionManager.getAllPositions();
+      const stats     = this.riskManager.getRiskStats();
+      const trades    = this.riskManager.getDailyTrades();
 
-        const engulfingStrategy = all.find(s => s instanceof EngulfingPatternStrategy) as EngulfingPatternStrategy | undefined;
-        if (engulfingStrategy) {
-          const snapshots = engulfingStrategy.getSnapshot();
-          await this.telegramBot.sendEngulfingSnapshot(snapshots).catch(err =>
-            logger.error('Failed to send Engulfing snapshot', { error: err.message })
-          );
-        }
+      const winning = trades.filter(t => t.result === 'WIN').length;
+      const losing  = trades.filter(t => t.result === 'LOSS').length;
+      const winRate = trades.length > 0 ? (winning / trades.length) * 100 : 0;
 
-        const emaStrategy = all.find(s => s instanceof EMACrossoverStrategy) as EMACrossoverStrategy | undefined;
-        if (emaStrategy) {
-          const snapshots = emaStrategy.getSnapshot();
-          await this.telegramBot.sendEMASnapshot(snapshots).catch(err =>
-            logger.error('Failed to send EMA snapshot', { error: err.message })
-          );
-        }
-
-        const confluenceStrategy = all.find(s => s instanceof ConfluenceStrategy) as ConfluenceStrategy | undefined;
-        if (confluenceStrategy) {
-          const snapshots = confluenceStrategy.getSnapshot();
-          await this.telegramBot.sendConfluenceSnapshot(snapshots).catch(err =>
-            logger.error('Failed to send Confluence snapshot', { error: err.message })
-          );
-        }
-      };
-
-      this.marketSnapshotInterval = setInterval(sendSnapshot, 15 * 60 * 1000);
-      logger.info('✅ Market snapshot broadcast started (every 15 min)');
-
-      // Send one immediately so you don't wait 15 min after startup
-      sendSnapshot().catch(() => {});
+      await this.telegramBot.sendLiveStatus({
+        mode:               this.config.trading.mode,
+        balance,
+        startingBalance:    this.initialBalance,
+        openPositions:      positions.map(p => ({
+          symbol:       p.symbol,
+          type:         p.type,
+          quantity:     p.quantity,
+          entryPrice:   p.entryPrice,
+          currentPrice: p.currentPrice || p.entryPrice,
+          pnl:          p.pnl || 0,
+          pnlPercent:   p.pnlPercent || 0,
+          stopLoss:     p.stopLoss,
+          target:       p.target,
+          entryTime:    p.entryTime,
+        })),
+        dailyPnL:           stats.dailyPnL,
+        totalTrades:        trades.length,
+        winningTrades:      winning,
+        losingTrades:       losing,
+        winRate,
+        dailyLossPercent:   stats.dailyLossPercentage,
+        maxDailyLossPercent: stats.maxDailyLossPercent,
+      });
+    } catch (err: any) {
+      logger.error('Failed to send live status', { error: err.message });
     }
   }
 
   private async stopStrategies(): Promise<void> {
-    if (this.marketSnapshotInterval) {
-      clearInterval(this.marketSnapshotInterval);
-      this.marketSnapshotInterval = undefined;
-      logger.info('✅ Market snapshot broadcast stopped');
+    if (this.liveStatusInterval) {
+      clearInterval(this.liveStatusInterval);
+      this.liveStatusInterval = undefined;
+      logger.info('✅ Live status broadcast stopped');
     }
     if (this.candleDataService) {
       this.candleDataService.stop();
