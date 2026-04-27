@@ -141,8 +141,8 @@ export class EMACrossoverStrategy extends BaseStrategy {
     if (!atr || atr === 0) return;
 
     // ADX regime filter: skip crossovers in choppy/ranging markets
-    if (adxValue !== undefined && adxValue < 20) {
-      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adxValue.toFixed(1)}<20, choppy market`);
+    if (adxValue !== undefined && adxValue < 7) {
+      logger.info(`[EMACrossover] ${crossDirection} cross on ${symbol} — ADX=${adxValue.toFixed(1)}<7, choppy market`);
       return;
     }
 

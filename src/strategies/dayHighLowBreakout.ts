@@ -438,8 +438,8 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // ADX regime filter: skip signals in choppy/ranging markets
     // Threshold 15 is appropriate for 5-min intraday (20 is calibrated for daily charts)
-    if (adx !== undefined && adx < 15) {
-      logger.info(`[${this.name}] 🚫 [${data.symbol}] Signal blocked — ADX=${adx.toFixed(1)}<15 (choppy market)`);
+    if (adx !== undefined && adx < 7) {
+      logger.info(`[${this.name}] 🚫 [${data.symbol}] Signal blocked — ADX=${adx.toFixed(1)}<7 (choppy market)`);
       return;
     }
 
@@ -467,11 +467,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     if (crossedAboveHigh && !state.hasBrokenHighToday) {
-      if (trend !== 'UP') {
-        logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — 30-min trend is ${trend}`);
-        return;
-      }
-
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 0.5) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] BUY breakout rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);
@@ -496,11 +491,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     if (crossedBelowLow && !state.hasBrokenLowToday) {
-      if (trend !== 'DOWN') {
-        logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — 30-min trend is ${trend}`);
-        return;
-      }
-
       const volRatio = this.cachedVolumeRatios.get(data.symbol) ?? 0;
       if (volRatio < 0.5) {
         logger.info(`[${this.name}] 🚫 [${data.symbol}] SELL breakout rejected — volume ${volRatio.toFixed(2)}x < 0.5x`);

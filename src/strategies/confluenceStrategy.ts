@@ -277,8 +277,8 @@ export class ConfluenceStrategy extends BaseStrategy {
     // ADX regime filter: skip choppy markets (closed candles, period*2+1 = 29 needed)
     const adx = calculateADX(closedCandles, 14);
     const adxValue = adx !== null ? adx : undefined;
-    if (adx !== null && adx < 20) {
-      logger.debug(`[Confluence] ${symbol}: ADX=${adx.toFixed(1)}<20 — choppy, skipping`);
+    if (adx !== null && adx < 7) {
+      logger.debug(`[Confluence] ${symbol}: ADX=${adx.toFixed(1)}<7 — choppy, skipping`);
       this.snapshots.set(symbol, {
         symbol, adx: adxValue, s1: 'NEUTRAL', s2: 'NEUTRAL', s3: 'NEUTRAL',
         buyVotes: 0, sellVotes: 0, tradesExecutedToday: state.tradesExecutedToday,

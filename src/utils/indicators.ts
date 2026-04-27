@@ -96,8 +96,8 @@ export function get1HTrend(
   const last = emas[emas.length - 1];
   const prev = emas[emas.length - 2];
 
-  if (last > prev * 1.0001) return 'UP';
-  if (last < prev * 0.9999) return 'DOWN';
+  if (last > prev * 1.001) return 'UP';
+  if (last < prev * 0.999) return 'DOWN';
   return 'NEUTRAL';
 }
 
@@ -118,8 +118,8 @@ export function get30MinTrend(
   const last = emas[emas.length - 1];
   const prev = emas[emas.length - 2];
 
-  if (last > prev * 1.0001) return 'UP';
-  if (last < prev * 0.9999) return 'DOWN';
+  if (last > prev * 1.001) return 'UP';
+  if (last < prev * 0.999) return 'DOWN';
   return 'NEUTRAL';
 }
 

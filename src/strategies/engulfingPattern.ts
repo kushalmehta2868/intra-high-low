@@ -103,8 +103,8 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     if (!atr || atr === 0) return;
 
     // ADX regime filter
-    if (adxValue !== undefined && adxValue < 20) {
-      logger.debug(`[EngulfingPattern] ${symbol}: ADX=${adxValue.toFixed(1)}<20 — choppy, skipping`);
+    if (adxValue !== undefined && adxValue < 7) {
+      logger.debug(`[EngulfingPattern] ${symbol}: ADX=${adxValue.toFixed(1)}<7 — choppy, skipping`);
       this.snapshots.set(symbol, { symbol, trend, adx: adxValue, volRatio, lastPattern: 'NONE', tradesExecutedToday: state.tradesExecutedToday });
       return;
     }
