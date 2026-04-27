@@ -1064,6 +1064,12 @@ export class TradingEngine extends EventEmitter {
   private async resumeForMarketOpen(): Promise<void> {
     logger.info('▶️ Resuming all services for market open');
 
+    // Reset kill switch at market open so a previous day's loss limit doesn't carry over
+    if (configManager.isKillSwitchActive()) {
+      configManager.setKillSwitch(false);
+      logger.info('🔓 Kill switch reset for new trading day');
+    }
+
     // 1. Reconnect broker (re-authenticates + starts WebSocket)
     const connected = await this.broker.connect();
     if (!connected) {

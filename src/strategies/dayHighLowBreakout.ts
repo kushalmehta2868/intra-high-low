@@ -173,8 +173,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     }
 
     // Now update current day's high/low
-    state.dayHigh = Math.max(state.dayHigh, data.high, data.ltp);
-    state.dayLow = Math.min(state.dayLow, data.low, data.ltp);
+    // NOTE: intentionally exclude data.high/data.low here — the exchange's running
+    // day-high field updates ahead of LTP, which would pre-inflate state.dayHigh and
+    // make the strict cross detection (ltp > prevDayHigh) impossible to satisfy.
+    state.dayHigh = Math.max(state.dayHigh, data.ltp);
+    state.dayLow = Math.min(state.dayLow, data.ltp);
 
     // Log price levels every 5 minutes
     this.logPriceLevels(data, state);
