@@ -464,15 +464,15 @@ export class WebSocketDataFeed extends EventEmitter {
 
       const priceChange = tracking.open > 0 ? ((ltp - tracking.open) / tracking.open * 100) : 0;
 
-      logger.info('📊 Market data update', {
-        symbol,
-        ltp: `₹${ltp.toFixed(2)}`,
-        open: `₹${tracking.open.toFixed(2)}`,
-        high: `₹${tracking.high.toFixed(2)}`,
-        low: `₹${tracking.low.toFixed(2)}`,
-        volume: volume > 0 ? volume.toLocaleString() : 'N/A',
-        change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}%`
-      });
+      // logger.info('📊 Market data update', {
+      //   symbol,
+      //   ltp: `₹${ltp.toFixed(2)}`,
+      //   open: `₹${tracking.open.toFixed(2)}`,
+      //   high: `₹${tracking.high.toFixed(2)}`,
+      //   low: `₹${tracking.low.toFixed(2)}`,
+      //   volume: volume > 0 ? volume.toLocaleString() : 'N/A',
+      //   change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}%`
+      // });
     }
 
     // Log WebSocket summary every 10 seconds
