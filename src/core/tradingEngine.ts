@@ -958,6 +958,15 @@ export class TradingEngine extends EventEmitter {
           const filledQuantity = fillResult.filled;
           const fillPrice = fillResult.averagePrice || adjustedEntryPrice;
 
+          // Re-anchor SL and target to actual fill price.
+          // adjustedEntryPrice was a pre-trade estimate; fillPrice is what the broker
+          // actually executed at (paper sim adds random slippage on top of our estimate).
+          // Shift both levels by the same delta so distances are preserved and every
+          // value in the Telegram message is consistent with the fill.
+          const fillDrift = fillPrice - adjustedEntryPrice;
+          const finalSL     = stopLoss + fillDrift;
+          const finalTarget = effectiveTarget !== undefined ? effectiveTarget + fillDrift : undefined;
+
           // IMPROVEMENT: Calculate and track actual slippage
           const actualSlippage = Math.abs(
             (fillPrice - currentPrice) / currentPrice,
@@ -1001,8 +1010,8 @@ export class TradingEngine extends EventEmitter {
           // live status, and exit messages all have correct values.
           const openedPosition = this.positionManager.getPosition(signal.symbol);
           if (openedPosition) {
-            openedPosition.stopLoss = stopLoss;
-            openedPosition.target   = effectiveTarget;
+            openedPosition.stopLoss = finalSL;
+            openedPosition.target   = finalTarget;
           }
 
           // Get account info for telegram
@@ -1016,8 +1025,8 @@ export class TradingEngine extends EventEmitter {
             filledQuantity,
             fillPrice,
             signal.reason,
-            stopLoss,
-            effectiveTarget,
+            finalSL,
+            finalTarget,
             balance,
             openPositionCount,
           );

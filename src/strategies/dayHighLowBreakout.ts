@@ -141,7 +141,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     if (state.open === 0) {
       state.open = data.open || data.ltp;
       state.dayHigh = data.high;
-      state.dayLow  = data.low;
+      state.dayLow = data.low;
       state.prevLtp = data.ltp;
       state.lastTickAt = Date.now();
       logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
@@ -163,7 +163,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // Keep range in sync with exchange running day high/low.
     state.dayHigh = Math.max(state.dayHigh, data.high);
-    state.dayLow  = Math.min(state.dayLow,  data.low);
+    state.dayLow = Math.min(state.dayLow, data.low);
 
     // Log price levels every 5 minutes
     this.logPriceLevels(data, state);
@@ -474,6 +474,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       marginMultiplier,
       useTrailingSL: true,
       signalPrice: ltp,
+      dayHigh,
       reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
       confidence: 0.8,
     };
@@ -527,6 +528,7 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       marginMultiplier,
       useTrailingSL: true,
       signalPrice: ltp,
+      dayLow,
       reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
       confidence: 0.8,
     };

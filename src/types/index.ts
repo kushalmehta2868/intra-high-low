@@ -95,6 +95,9 @@ export interface StrategySignal {
   useTrailingSL?: boolean;
   /** LTP at the exact moment the strategy detected the breakout/signal. */
   signalPrice?: number;
+  /** Session day high/low at the moment the signal fired (for Telegram display). */
+  dayHigh?: number;
+  dayLow?: number;
 }
 
 export interface MarketData {
