@@ -11,11 +11,6 @@ import { calculateATR, calculateRSI, calculateADX, get30MinTrend, sessionVolumeR
 import { CandleBundle } from "../services/candleDataService";
 import { strategyStateStore } from "../services/strategyStateStore";
 
-interface PendingSignal {
-  direction: 'BUY' | 'SELL';
-  breakoutLevel: number;
-}
-
 interface SymbolState {
   // Current day OHLC
   dayHigh: number;
@@ -35,9 +30,6 @@ interface SymbolState {
   // Cooldown after position close
   positionClosedAt: number | null; // Timestamp when position was closed
   isInCooldown: boolean; // Whether symbol is in cooldown period
-
-  // 2-tick breakout confirmation: set on first cross, cleared on confirm/cancel
-  pendingSignal: PendingSignal | null;
 
   // Circuit breaker detection: timestamp of last tick received (not price change)
   lastTickAt: number;
@@ -102,7 +94,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         tradesExecutedToday: restoredTrades,
         positionClosedAt,
         isInCooldown,
-        pendingSignal: null,
         lastTickAt: now,
         lastLogTime: 0,
         lastResetDate: saved?.lastResetDate || "",
@@ -158,19 +149,11 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // Track tick arrival for circuit breaker detection (price can be flat; ticks stop only on halt)
     state.lastTickAt = Date.now();
 
-    // Check pending signal confirmation (2-tick confirmation logic)
-    if (state.pendingSignal) {
-      this.checkPendingSignalConfirmation(data.symbol, data.ltp, state);
-    }
-
     // Cache previous levels BEFORE update
     const prevDayHigh = state.dayHigh;
     const prevDayLow = state.dayLow;
 
-    // Detect breakout using previous levels (only if no pending signal already)
-    if (!state.pendingSignal) {
-      this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
-    }
+    this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
 
     // Now update current day's high/low
     // NOTE: intentionally exclude data.high/data.low here — the exchange's running
@@ -209,7 +192,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.tradesExecutedToday = 0;
       state.positionClosedAt = null;
       state.isInCooldown = false;
-      state.pendingSignal = null;
       state.lastTickAt = Date.now();
       state.lastResetDate = istDate;
 
@@ -266,54 +248,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         : null,
       lastResetDate: istDate,
     });
-  }
-
-  /**
-   * 2-tick confirmation: if the pending signal direction is still valid on the
-   * next tick, emit the signal. If price reversed, cancel and allow re-detection.
-   */
-  private checkPendingSignalConfirmation(symbol: string, ltp: number, state: SymbolState): void {
-    const pending = state.pendingSignal!;
-
-    const atr = this.cachedATRs.get(symbol);
-
-    if (pending.direction === 'BUY') {
-      if (ltp > pending.breakoutLevel) {
-        // Confirmed: price still above breakout level on second tick
-        state.pendingSignal = null;
-        state.tradesExecutedToday++;
-        this.saveSymbolState(symbol, state);
-        this.on_buy_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
-      } else {
-        // Reversed: cancel pending signal, reset flag so we can try again
-        logger.info(`[${this.name}] 🔁 [${symbol}] BUY breakout not confirmed — price reversed, resetting`, {
-          strategy: this.name,
-          symbol,
-          breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
-          currentLtp: `₹${ltp.toFixed(2)}`,
-        });
-        state.pendingSignal = null;
-        state.hasBrokenHighToday = false;
-      }
-    } else {
-      if (ltp < pending.breakoutLevel) {
-        // Confirmed: price still below breakout level on second tick
-        state.pendingSignal = null;
-        state.tradesExecutedToday++;
-        this.saveSymbolState(symbol, state);
-        this.on_sell_signal(symbol, ltp, pending.breakoutLevel, state.prevLtp, atr);
-      } else {
-        // Reversed: cancel pending signal, reset flag so we can try again
-        logger.info(`[${this.name}] 🔁 [${symbol}] SELL breakout not confirmed — price reversed, resetting`, {
-          strategy: this.name,
-          symbol,
-          breakoutLevel: `₹${pending.breakoutLevel.toFixed(2)}`,
-          currentLtp: `₹${ltp.toFixed(2)}`,
-        });
-        state.pendingSignal = null;
-        state.hasBrokenLowToday = false;
-      }
-    }
   }
 
   private logPriceLevels(data: MarketData, state: SymbolState): void {
@@ -482,14 +416,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       }
 
       state.hasBrokenHighToday = true;
-      state.pendingSignal = { direction: 'BUY', breakoutLevel: dayHigh };
-      logger.info(`[${this.name}] ⏳ [${data.symbol}] BUY breakout detected — awaiting 1-tick confirmation`, {
-        strategy: this.name,
-        symbol: data.symbol,
-        dayHigh: `₹${dayHigh.toFixed(2)}`,
-        ltp: `₹${ltp.toFixed(2)}`,
-        volumeRatio: `${volRatio.toFixed(2)}x`,
-      });
+      state.tradesExecutedToday++;
+      this.saveSymbolState(data.symbol, state);
+      this.on_buy_signal(data.symbol, ltp, dayHigh, prevLtp, this.cachedATRs.get(data.symbol));
       return;
     }
 
@@ -506,12 +435,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       }
 
       state.hasBrokenLowToday = true;
-      state.pendingSignal = { direction: 'SELL', breakoutLevel: dayLow };
-      logger.info(`[${this.name}] ⏳ [${data.symbol}] SELL breakout detected — awaiting 1-tick confirmation`, {
-        dayLow: `₹${dayLow.toFixed(2)}`,
-        ltp: `₹${ltp.toFixed(2)}`,
-        volumeRatio: `${volRatio.toFixed(2)}x`,
-      });
+      state.tradesExecutedToday++;
+      this.saveSymbolState(data.symbol, state);
+      this.on_sell_signal(data.symbol, ltp, dayLow, prevLtp, this.cachedATRs.get(data.symbol));
       return;
     }
   }
@@ -666,7 +592,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       // Position closed - start 10-minute cooldown
       state.positionClosedAt = Date.now();
       state.isInCooldown = true;
-      state.pendingSignal = null; // Cancel any pending signal on close
 
       // Persist cooldown state immediately so restart survives
       this.saveSymbolState(position.symbol, state);
@@ -698,7 +623,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         tradesExecutedToday: 0,
         positionClosedAt: null,
         isInCooldown: false,
-        pendingSignal: null,
         lastTickAt: Date.now(),
         lastLogTime: 0,
         lastResetDate: "",
@@ -778,7 +702,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       state.tradesExecutedToday = 0;
       state.positionClosedAt = null;
       state.isInCooldown = false;
-      state.pendingSignal = null;
       state.lastTickAt = Date.now();
       state.lastLogTime = 0;
       state.lastResetDate = today;

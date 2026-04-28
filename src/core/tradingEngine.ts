@@ -720,20 +720,50 @@ export class TradingEngine extends EventEmitter {
             return;
           }
 
-          // Enforce minimum 1:1.5 risk-reward before placing any order
-          if (signal.target) {
+          // Enforce minimum 1:1.5 risk-reward before placing any order.
+          // Slippage shifts the adjusted entry away from the original signal price,
+          // which widens the SL distance while keeping the target fixed — collapsing R:R.
+          // Fix: reproject the target from adjustedEntryPrice using the original R:R ratio
+          // so the intended strategy multiple is preserved after slippage.
+          let effectiveTarget = signal.target;
+          if (effectiveTarget) {
             const slDist = Math.abs(adjustedEntryPrice - stopLoss);
-            const tpDist = Math.abs(signal.target - adjustedEntryPrice);
+
+            // Original R:R computed from pre-slippage (currentPrice) signal
+            const origSlDist = Math.abs((signal.stopLoss ?? stopLoss) - currentPrice);
+            const origTpDist = Math.abs(effectiveTarget - currentPrice);
+            const origRR     = origSlDist > 0 ? origTpDist / origSlDist : 2.0;
+
+            const tpDist = Math.abs(effectiveTarget - adjustedEntryPrice);
             const rr     = slDist > 0 ? tpDist / slDist : 0;
+
             if (rr < 1.5) {
-              logger.warn("Order rejected — R:R below minimum 1:1.5", {
-                symbol: signal.symbol,
-                rr:     rr.toFixed(2),
-                slDist: `₹${slDist.toFixed(2)}`,
-                tpDist: `₹${tpDist.toFixed(2)}`,
+              // Reproject target from adjusted entry maintaining original R:R
+              const reprojectedTarget = signal.action === "BUY"
+                ? adjustedEntryPrice + origRR * slDist
+                : adjustedEntryPrice - origRR * slDist;
+
+              const newRR = slDist > 0 ? Math.abs(reprojectedTarget - adjustedEntryPrice) / slDist : 0;
+
+              if (newRR < 1.5) {
+                logger.warn("Order rejected — R:R below minimum 1:1.5 even after slippage correction", {
+                  symbol: signal.symbol,
+                  origRR: origRR.toFixed(2),
+                  rr:     newRR.toFixed(2),
+                  slDist: `₹${slDist.toFixed(2)}`,
+                });
+                orderIdempotencyManager.markOrderFailed(orderKey, `R:R too low (${newRR.toFixed(2)} < 1.5)`);
+                return;
+              }
+
+              logger.info("Target reprojected after slippage to preserve R:R", {
+                symbol:          signal.symbol,
+                origTarget:      `₹${effectiveTarget.toFixed(2)}`,
+                adjustedTarget:  `₹${reprojectedTarget.toFixed(2)}`,
+                origRR:          origRR.toFixed(2),
+                newRR:           newRR.toFixed(2),
               });
-              orderIdempotencyManager.markOrderFailed(orderKey, `R:R too low (${rr.toFixed(2)} < 1.5)`);
-              return;
+              effectiveTarget = reprojectedTarget;
             }
           }
 
@@ -787,7 +817,7 @@ export class TradingEngine extends EventEmitter {
                 quantity,
                 limitPrice,
                 stopLoss,
-                signal.target,
+                effectiveTarget,
               ),
             3,
             1000,
@@ -921,7 +951,7 @@ export class TradingEngine extends EventEmitter {
               {
                 symbol: signal.symbol,
                 stopLoss: `₹${stopLoss.toFixed(2)}`,
-                target: signal.target ? `₹${signal.target.toFixed(2)}` : "N/A",
+                target: effectiveTarget ? `₹${effectiveTarget.toFixed(2)}` : "N/A",
               },
             );
           }
@@ -938,7 +968,7 @@ export class TradingEngine extends EventEmitter {
             fillPrice,
             signal.reason,
             stopLoss,
-            signal.target,
+            effectiveTarget,
             balance,
             openPositionCount,
           );
