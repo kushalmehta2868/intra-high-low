@@ -96,11 +96,14 @@ export class PositionManager extends EventEmitter {
         // Emit with complete position data including exit price
         this.emit('position_closed', {
           ...position,
+          grossPnL,
+          charges: totalCharges,
+          closedQuantity,
           pnl: netPnL,
           pnlPercent,
-          currentPrice: trade.price, // Ensure currentPrice is set
-          exitPrice: trade.price,     // Also add exitPrice for clarity
-          exitTime: trade.timestamp
+          currentPrice: trade.price,
+          exitPrice: trade.price,
+          exitTime: trade.timestamp,
         });
 
         logger.info('Position closed', {

@@ -65,9 +65,12 @@ export interface Position {
   pnl: number;
   pnlPercent: number;
   entryTime: Date;
-  useTrailingSL?: boolean;   // Whether this position should use trailing SL
-  initialStopLoss?: number;   // To track where we started
-  isTrailing?: boolean;      // Whether trailing has been activated (e.g. hit BE)
+  exitTime?: Date;
+  exitPrice?: number;
+  exitReason?: string;
+  useTrailingSL?: boolean;
+  initialStopLoss?: number;
+  isTrailing?: boolean;
 }
 
 export interface Trade {
@@ -88,8 +91,10 @@ export interface StrategySignal {
   target?: number;
   reason: string;
   confidence?: number;
-  marginMultiplier?: number;  // Per-symbol margin multiplier (e.g., 5 for MIS stocks)
-  useTrailingSL?: boolean;    // Add trailing SL flag
+  marginMultiplier?: number;
+  useTrailingSL?: boolean;
+  /** LTP at the exact moment the strategy detected the breakout/signal. */
+  signalPrice?: number;
 }
 
 export interface MarketData {

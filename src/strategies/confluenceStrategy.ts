@@ -71,16 +71,16 @@ function s1_rsiMacdScalp(candles: Candle[], price: number): Vote {
   const slDist = Math.max(atr * 1.0, price * 0.003);
   const tpDist = Math.max(atr * 2.0, price * 0.006);
 
-  if (rsi < 35 && crossUp && price > latestEMA9 && volRatio >= 0.5) {
+  if (rsi < 40 && crossUp && price > latestEMA9 && volRatio >= 0.5) {
     return {
       direction: 'BUY', slDist, tpDist,
-      reason: `S1 BUY: RSI=${rsi.toFixed(1)}<35 MACD↑ price>EMA9 vol=${volRatio.toFixed(2)}x`,
+      reason: `S1 BUY: RSI=${rsi.toFixed(1)}<40 MACD↑ price>EMA9 vol=${volRatio.toFixed(2)}x`,
     };
   }
-  if (rsi > 65 && crossDn && price < latestEMA9 && volRatio >= 0.5) {
+  if (rsi > 60 && crossDn && price < latestEMA9 && volRatio >= 0.5) {
     return {
       direction: 'SELL', slDist, tpDist,
-      reason: `S1 SELL: RSI=${rsi.toFixed(1)}>65 MACD↓ price<EMA9 vol=${volRatio.toFixed(2)}x`,
+      reason: `S1 SELL: RSI=${rsi.toFixed(1)}>60 MACD↓ price<EMA9 vol=${volRatio.toFixed(2)}x`,
     };
   }
   return N(`S1: no signal (RSI=${rsi.toFixed(1)}, crossUp=${crossUp}, crossDn=${crossDn})`);
@@ -186,7 +186,7 @@ function s3_vwapPullback(candles: Candle[], price: number): Vote {
   const current       = candles[candles.length - 1];
 
   const distToVwap = Math.abs(price - vwap) / vwap;
-  const nearVwap   = distToVwap <= 0.005;
+  const nearVwap   = distToVwap <= 0.01; // widened from 0.5% → 1.0%
   const btwnLines  = price >= Math.min(vwap, latestEMA9) && price <= Math.max(vwap, latestEMA9);
 
   if (!nearVwap && !btwnLines) {

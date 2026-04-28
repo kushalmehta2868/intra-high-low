@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { TelegramConfig } from '../types';
+import { TelegramConfig, Position } from '../types';
 import { logger } from '../utils/logger';
 import { EventEmitter } from 'events';
 
@@ -143,61 +143,61 @@ ${message}
     await this.sendMessage(message);
   }
 
-  public async sendPositionUpdate(
-    symbol: string,
-    pnl: number,
-    pnlPercent: number,
-    status: 'OPENED' | 'CLOSED',
-    additionalInfo?: {
-      entryPrice?: number;
-      exitPrice?: number;
-      quantity?: number;
-      entryTime?: Date;
-      exitTime?: Date;
-    }
-  ): Promise<void> {
-    const emoji = pnl >= 0 ? '✅' : '❌';
-    const statusEmoji = status === 'OPENED' ? '📈' : '📉';
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+  public async sendTradeClose(position: Position): Promise<void> {
+    const exitPrice  = position.exitPrice  ?? position.currentPrice;
+    const exitTime   = position.exitTime   ?? new Date();
+    const pnl        = position.pnl;
+    const pnlPercent = position.pnlPercent;
+
+    const isLong    = position.type === 'LONG';
+    const pnlEmoji  = pnl >= 0 ? '✅' : '❌';
+    const sideLabel = isLong ? 'LONG' : 'SHORT';
+
+    // Classify exit reason for header
+    const reason = position.exitReason ?? 'Manual';
+    let reasonLabel: string;
+    if (/target/i.test(reason))    reasonLabel = '🎯 Target Hit';
+    else if (/stop/i.test(reason)) reasonLabel = '🛑 Stop Loss';
+    else if (/daily/i.test(reason))reasonLabel = '⚠️ Daily Limit';
+    else                           reasonLabel = `📤 ${reason}`;
+
+    const timeStr = exitTime.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
 
-    let message = `${statusEmoji} *POSITION ${status}*\n\n`;
-    message += `🕐 *Time:* ${timeStr}\n`;
-    message += `*Symbol:* \`${symbol}\`\n`;
+    const holdMs  = exitTime.getTime() - position.entryTime.getTime();
+    const holdMin = Math.floor(holdMs / 60000);
+    const holdStr = holdMin >= 60
+      ? `${Math.floor(holdMin / 60)}h ${holdMin % 60}m`
+      : `${holdMin}m`;
 
-    if (status === 'CLOSED' && additionalInfo) {
-      message += `\n`;
-      if (additionalInfo.quantity !== undefined && additionalInfo.quantity > 0) {
-        message += `*Quantity:* ${additionalInfo.quantity}\n`;
-      }
-      if (additionalInfo.entryPrice !== undefined && additionalInfo.entryPrice > 0) {
-        message += `*Entry Price:* ₹${additionalInfo.entryPrice.toFixed(2)}\n`;
-      }
-      if (additionalInfo.exitPrice !== undefined && additionalInfo.exitPrice > 0) {
-        message += `*Exit Price:* ₹${additionalInfo.exitPrice.toFixed(2)}\n`;
-      }
-      message += `\n${emoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
+    const exitValue = position.quantity * exitPrice;
 
-      if (additionalInfo.entryTime && additionalInfo.exitTime) {
-        const holdingTime = (additionalInfo.exitTime.getTime() - additionalInfo.entryTime.getTime()) / 60000; // minutes
-        const hours = Math.floor(holdingTime / 60);
-        const minutes = Math.floor(holdingTime % 60);
-        message += `\n⏱️ *Holding Time:* ${hours > 0 ? `${hours}h ` : ''}${minutes}m`;
-      }
-
-      if (pnl >= 0) {
-        message += `\n🎯 *Profit Trade*`;
-      } else {
-        message += `\n⚠️ *Loss Trade*`;
-      }
+    // R:R achieved: how many rupees gained/lost per rupee risked
+    let rrStr = 'N/A';
+    if (position.stopLoss && position.stopLoss > 0) {
+      const riskPerShare   = Math.abs(position.entryPrice - position.stopLoss);
+      const returnPerShare = Math.abs(exitPrice - position.entryPrice);
+      if (riskPerShare > 0) rrStr = (returnPerShare / riskPerShare).toFixed(2);
     }
 
-    await this.sendMessage(message);
+    let msg = `${pnlEmoji} *EXIT ${sideLabel} — ${position.symbol.replace('-EQ', '')}*\n\n`;
+    msg += `🕐 *Time:* ${timeStr}\n`;
+    msg += `${reasonLabel}\n`;
+    msg += `⏱ *Held:* ${holdStr}\n\n`;
+    msg += `*Entry:* ₹${position.entryPrice.toFixed(2)} → *Exit:* ₹${exitPrice.toFixed(2)}\n`;
+    msg += `*Qty:* ${position.quantity}  |  *Value:* ₹${exitValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+    msg += `${pnlEmoji} *P&L:* ₹${pnl >= 0 ? '+' : ''}${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
+    msg += `*R:R achieved:* ${rrStr}\n`;
+
+    if (position.stopLoss || position.target) {
+      msg += `\n───────────────────\n`;
+      if (position.stopLoss) msg += `*SL:* ₹${position.stopLoss.toFixed(2)}  `;
+      if (position.target)   msg += `*Target:* ₹${position.target.toFixed(2)}`;
+      if (position.stopLoss || position.target) msg += `\n`;
+    }
+
+    await this.sendMessage(msg);
   }
 
   public async sendRiskAlert(type: string, details: string): Promise<void> {
@@ -429,7 +429,7 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
         const symbol = (trade.symbol || '').replace('-EQ', '').padEnd(9);
         const side = (trade.side || '').padEnd(4);
         // TradeMetrics field is `pnl`, not `netPnL`
-        const tradePnL: number = trade.pnl ?? 0;
+        const tradePnL: number = trade.netPnL ?? trade.pnl ?? 0;
         const tradePnLPct: number = trade.pnlPercent ?? 0;
         const pnl = (tradePnL >= 0 ? '+' : '') + tradePnL.toFixed(0);
         const pnlFormatted = pnl.padStart(8);

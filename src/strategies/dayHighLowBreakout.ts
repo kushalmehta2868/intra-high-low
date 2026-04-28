@@ -85,9 +85,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       }
 
       this.symbolStates.set(symbol, {
-        dayHigh: 0,
-        dayLow: Infinity,
-        open: 0,
+        dayHigh: saved?.dayHigh ?? 0,
+        dayLow: saved?.dayLow ?? Infinity,
+        open: saved?.open ?? 0,
         prevLtp: 0,
         hasBrokenHighToday: false,
         hasBrokenLowToday: false,
@@ -106,6 +106,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
           cooldownEndsAt: restoredCooldown && positionClosedAt
             ? new Date(positionClosedAt + this.COOLDOWN_PERIOD_MS).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
             : 'N/A',
+          dayHigh: saved.dayHigh ? `₹${saved.dayHigh.toFixed(2)}` : 'not saved',
+          dayLow: saved.dayLow ? `₹${saved.dayLow.toFixed(2)}` : 'not saved',
+          open: saved.open ? `₹${saved.open.toFixed(2)}` : 'not saved',
         });
       }
     }
@@ -131,14 +134,17 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     // Check and clear cooldown if period has elapsed
     this.checkCooldownExpiry(data.symbol, state);
 
-    // Set opening price AND initialize high/low on first data point
+    // Set opening price AND initialize high/low on first data point.
+    // Use LTP only — NOT data.high/data.low — because the exchange's running day-high/low
+    // fields include pre-market/auction prices (e.g. ₹203.00 pre-open auction low while
+    // continuous-session low is ₹203.80), which would trigger a false breakout signal.
     if (state.open === 0) {
       state.open = data.open || data.ltp;
-      state.dayHigh = data.high || data.ltp; // Initialize from real data, not 0
-      state.dayLow = data.low || data.ltp; // Initialize from real data, not Infinity
+      state.dayHigh = data.ltp;
+      state.dayLow = data.ltp;
       state.prevLtp = data.ltp;
       state.lastTickAt = Date.now();
-      logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
+      logger.info(`📊 [${data.symbol}] Day initialized from first tick (LTP-only range)`, {
         open: `₹${state.open.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
         dayLow: `₹${state.dayLow.toFixed(2)}`,
@@ -247,6 +253,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         ? state.positionClosedAt + this.COOLDOWN_PERIOD_MS
         : null,
       lastResetDate: istDate,
+      dayHigh: state.dayHigh > 0 ? state.dayHigh : undefined,
+      dayLow: state.dayLow !== Infinity ? state.dayLow : undefined,
+      open: state.open > 0 ? state.open : undefined,
     });
   }
 
@@ -466,9 +475,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       stopLoss,
       target,
       marginMultiplier,
-      useTrailingSL: true, // Enable trailing SL for this strategy
+      useTrailingSL: true,
+      signalPrice: ltp,
       reason: `Crossed ABOVE day high at ₹${ltp.toFixed(2)} (Day High: ₹${dayHigh.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
-      confidence: 0.8, // Increased confidence due to filters
+      confidence: 0.8,
     };
 
     const riskPerShare = ltp - stopLoss;
@@ -518,9 +528,10 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
       stopLoss,
       target,
       marginMultiplier,
-      useTrailingSL: true, // Enable trailing SL for this strategy
+      useTrailingSL: true,
+      signalPrice: ltp,
       reason: `Crossed BELOW day low at ₹${ltp.toFixed(2)} (Day Low: ₹${dayLow.toFixed(2)}, ATR: ${atr ? `₹${atr.toFixed(2)}` : 'fixed'})`,
-      confidence: 0.8, // Increased confidence due to filters
+      confidence: 0.8,
     };
 
     const riskPerShare = stopLoss - ltp;

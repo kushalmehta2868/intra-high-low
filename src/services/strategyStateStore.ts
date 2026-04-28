@@ -7,6 +7,9 @@ export interface SymbolPersistentState {
   isInCooldown: boolean;
   cooldownExpiresAt: number | null; // Unix timestamp (ms) when cooldown ends
   lastResetDate: string;             // YYYY-MM-DD in IST
+  dayHigh?: number;                  // LTP-tracked session high (excludes pre-market)
+  dayLow?: number;                   // LTP-tracked session low (excludes pre-market)
+  open?: number;                     // Opening price for the session
 }
 
 interface DailyStateFile {

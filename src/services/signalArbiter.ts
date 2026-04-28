@@ -27,7 +27,7 @@ export class SignalArbiter extends EventEmitter {
   private buffer: Map<string, Buffered[]> = new Map();
   private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
-  constructor(windowMs = 15_000) {
+  constructor(windowMs = 3_000) {
     super();
     this.WINDOW_MS = windowMs;
   }

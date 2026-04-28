@@ -103,7 +103,8 @@ export function get1HTrend(
 
 /**
  * Determine trend direction from EMA(period) slope on 30-min candles (oldest-first).
- * Uses a small threshold (0.01%) to filter noise.
+ * Uses 0.03% threshold — previous 0.1% was too wide and returned NEUTRAL on most
+ * intraday sessions, silencing EMA Crossover and Engulfing strategies entirely.
  */
 export function get30MinTrend(
   thirtyMinCandles: Candle[],
@@ -118,8 +119,8 @@ export function get30MinTrend(
   const last = emas[emas.length - 1];
   const prev = emas[emas.length - 2];
 
-  if (last > prev * 1.001) return 'UP';
-  if (last < prev * 0.999) return 'DOWN';
+  if (last > prev * 1.0003) return 'UP';
+  if (last < prev * 0.9997) return 'DOWN';
   return 'NEUTRAL';
 }
 

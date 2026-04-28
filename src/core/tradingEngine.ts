@@ -59,7 +59,10 @@ export class TradingEngine extends EventEmitter {
   private candleHandlersRegistered: Set<string> = new Set();
   private initialBalance: number = 0;
   private watchlist: string[] = [];
-  private symbolsToTrail: Set<string> = new Set(); // Track symbols that requested trailing SL
+  private symbolsToTrail: Set<string> = new Set();
+  // Per-symbol timestamp of last position close — prevents cross-strategy re-entry
+  private readonly POST_CLOSE_COOLDOWN_MS = 10 * 60 * 1000; // 10 min
+  private postCloseCooldowns: Map<string, number> = new Map();
 
   // Slippage configuration (IMPROVED - Dynamic calculation)
   private readonly SLIPPAGE_BUFFER_MIN = 0.001; // 0.1% minimum expected slippage
@@ -177,6 +180,18 @@ export class TradingEngine extends EventEmitter {
         strategy.onMarketData(data);
       }
 
+      // Keep open position's currentPrice / PnL fresh from WebSocket (no REST poll needed).
+      const livePosition = this.positionManager.getPosition(data.symbol);
+      if (livePosition && livePosition.quantity > 0) {
+        livePosition.currentPrice = data.ltp;
+        livePosition.pnl = livePosition.type === "LONG"
+          ? (data.ltp - livePosition.entryPrice) * livePosition.quantity
+          : (livePosition.entryPrice - data.ltp) * livePosition.quantity;
+        if (livePosition.entryPrice > 0) {
+          livePosition.pnlPercent = (livePosition.pnl / (livePosition.entryPrice * livePosition.quantity)) * 100;
+        }
+      }
+
       // NEW: Trailing Stop-Loss Engine
       this.handleTrailingStopLoss(data);
     });
@@ -200,16 +215,17 @@ export class TradingEngine extends EventEmitter {
         strategy.onPositionUpdate({ ...position, quantity: 0 });
       }
 
-      // Record trade with detailed information for daily summary
-      const pnlPercent =
-        (position.pnl / (position.entryPrice * position.quantity)) * 100;
-      this.riskManager.recordTrade(position.pnl, {
+      // Record trade with detailed information for daily summary.
+      // position.pnl is already NET (charges deducted by positionManager), so pass
+      // grossPnL as the first arg so riskManager doesn't double-deduct charges.
+      // position.quantity is 0 here — use position.pnlPercent from the event.
+      this.riskManager.recordTrade((position as any).grossPnL ?? position.pnl, {
         symbol: position.symbol,
-        side: position.type === "LONG" ? "SELL" : "BUY", // Closing side
-        quantity: position.quantity,
+        side: position.type === "LONG" ? "SELL" : "BUY",
+        quantity: (position as any).closedQuantity,
         entryPrice: position.entryPrice,
-        exitPrice: position.currentPrice || position.exitPrice,
-        pnlPercent: pnlPercent,
+        exitPrice: position.exitPrice ?? position.currentPrice,
+        pnlPercent: position.pnlPercent,
         entryTime: position.entryTime,
         exitTime: position.exitTime || new Date(),
       });
@@ -232,9 +248,9 @@ export class TradingEngine extends EventEmitter {
         side: position.type === "LONG" ? "SELL" : "BUY",
         entryPrice: position.entryPrice,
         exitPrice: exitPrice,
-        quantity: position.quantity,
+        quantity: (position as any).closedQuantity,
         pnl: position.pnl,
-        pnlPercent: pnlPercent,
+        pnlPercent: position.pnlPercent,
         expectedSlippage: this.SLIPPAGE_BUFFER_MIN,
         actualSlippage: actualSlippage,
         holdTimeMs: holdTimeMs,
@@ -247,20 +263,8 @@ export class TradingEngine extends EventEmitter {
         exitReason: position.exitReason || "MANUAL",
       });
 
-      // Send enhanced Telegram notification with full trade details
-      this.telegramBot.sendPositionUpdate(
-        position.symbol,
-        position.pnl,
-        pnlPercent,
-        "CLOSED",
-        {
-          entryPrice: position.entryPrice,
-          exitPrice: position.currentPrice || position.exitPrice,
-          quantity: position.quantity,
-          entryTime: position.entryTime,
-          exitTime: position.exitTime || new Date(),
-        },
-      );
+      this.postCloseCooldowns.set(position.symbol, Date.now());
+      this.telegramBot.sendTradeClose(position);
     });
 
     this.positionManager.on(
@@ -532,6 +536,20 @@ export class TradingEngine extends EventEmitter {
             return;
           }
 
+          // Block new entries while a position is still open for this symbol
+          if (this.positionManager.getPosition(signal.symbol)) {
+            logger.warn("Signal ignored — position already open", { symbol: signal.symbol, action: signal.action });
+            return;
+          }
+
+          // Block re-entry within 10 min of the last close on this symbol
+          const lastClose = this.postCloseCooldowns.get(signal.symbol);
+          if (lastClose && Date.now() - lastClose < this.POST_CLOSE_COOLDOWN_MS) {
+            const remainingSec = Math.round((this.POST_CLOSE_COOLDOWN_MS - (Date.now() - lastClose)) / 1000);
+            logger.info("Signal ignored — post-close cooldown active", { symbol: signal.symbol, remainingSec });
+            return;
+          }
+
           // IMPROVEMENT: Check order idempotency BEFORE any processing
           const orderKey = orderIdempotencyManager.generateOrderKey(
             signal.symbol,
@@ -557,8 +575,9 @@ export class TradingEngine extends EventEmitter {
             return; // Exit early, duplicate order
           }
 
-          // Get current price with retry
-          const currentPrice = await retry(
+          // Fetch a fresh LTP to validate market conditions haven't changed
+          // since the signal was generated (arbiter adds a short buffer delay).
+          const fetchedPrice = await retry(
             () => this.broker.getLTP(signal.symbol),
             3,
             500,
@@ -567,18 +586,38 @@ export class TradingEngine extends EventEmitter {
               symbol: signal.symbol,
               error: error.message,
             });
-            orderIdempotencyManager.markOrderFailed(
-              orderKey,
-              "Price fetch failed",
-            );
+            orderIdempotencyManager.markOrderFailed(orderKey, "Price fetch failed");
             return null;
           });
 
-          if (!currentPrice) {
-            logger.warn("Price fetch failed - skipping signal", {
-              symbol: signal.symbol,
-            });
+          if (!fetchedPrice) {
+            logger.warn("Price fetch failed - skipping signal", { symbol: signal.symbol });
             return;
+          }
+
+          // Use the signal's detection price as the entry base if available.
+          // The signal was emitted from a live WebSocket tick; the arbiter window adds
+          // a small delay — re-fetching LTP after that delay produces a stale-relative
+          // price that doesn't match the SL/target calculated at detection time.
+          const currentPrice = signal.signalPrice ?? fetchedPrice;
+
+          // Stale-breakout guard: if current market price has drifted more than 0.5%
+          // away from where the breakout was detected, skip — we'd be chasing.
+          if (signal.signalPrice) {
+            const drift = Math.abs(fetchedPrice - signal.signalPrice) / signal.signalPrice;
+            const MAX_DRIFT = 0.005; // 0.5%
+            if (drift > MAX_DRIFT) {
+              logger.warn("Signal skipped — price drifted too far since detection", {
+                symbol:      signal.symbol,
+                action:      signal.action,
+                signalPrice: `₹${signal.signalPrice.toFixed(2)}`,
+                currentLTP:  `₹${fetchedPrice.toFixed(2)}`,
+                drift:       `${(drift * 100).toFixed(2)}%`,
+                maxDrift:    `${(MAX_DRIFT * 100).toFixed(2)}%`,
+              });
+              orderIdempotencyManager.markOrderFailed(orderKey, "Price drifted too far");
+              return;
+            }
           }
 
           // IMPROVEMENT: Check Circuit Limits
@@ -958,6 +997,14 @@ export class TradingEngine extends EventEmitter {
             );
           }
 
+          // Stamp SL and target on the position object so monitoring, trailing SL,
+          // live status, and exit messages all have correct values.
+          const openedPosition = this.positionManager.getPosition(signal.symbol);
+          if (openedPosition) {
+            openedPosition.stopLoss = stopLoss;
+            openedPosition.target   = effectiveTarget;
+          }
+
           // Get account info for telegram
           const balance = await this.broker.getAccountBalance();
           const positions = this.positionManager.getAllPositions();
@@ -1012,9 +1059,8 @@ export class TradingEngine extends EventEmitter {
 
     const side = position.type === "LONG" ? OrderSide.SELL : OrderSide.BUY;
 
-    // Get fresh LTP before placing close order
-    const currentPrice =
-      (await this.broker.getLTP(symbol)) || position.currentPrice;
+    // Store exit reason so position_closed event can include it in the Telegram message
+    position.exitReason = reason;
 
     const order = await this.broker.placeOrder(
       symbol,
@@ -1025,13 +1071,7 @@ export class TradingEngine extends EventEmitter {
 
     if (order) {
       logger.info("Position close order placed", { symbol, reason });
-      await this.telegramBot.sendTradeNotification(
-        side,
-        symbol,
-        position.quantity,
-        currentPrice,
-        reason,
-      );
+      // Telegram notification is sent by the position_closed event handler below
     }
   }
 
