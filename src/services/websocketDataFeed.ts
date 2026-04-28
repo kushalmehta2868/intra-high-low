@@ -435,12 +435,12 @@ export class WebSocketDataFeed extends EventEmitter {
       this.priceTracking.set(symbol, tracking);
     }
 
-    // Update tracking
+    // Update tracking using exchange-reported day high/low from the socket.
     if (tracking.open === 0) {
       tracking.open = open;
     }
     tracking.high = Math.max(tracking.high, high);
-    tracking.low = tracking.low === Infinity ? low : Math.min(tracking.low, low);
+    tracking.low  = tracking.low === Infinity ? low : Math.min(tracking.low, low);
 
     const marketData: MarketData = {
       symbol,

@@ -2,8 +2,6 @@ import { BaseBroker } from '../base';
 import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade, BrokerConfig, MarketData } from '../../types';
 import { logger } from '../../utils/logger';
 import { AngelOneClient } from '../angelone/client';
-import { TradingTelegramBot } from '../../telegram/bot';
-import { TelegramConfig } from '../../types';
 import { WebSocketDataFeed } from '../../services/websocketDataFeed';
 import { marketDataCache } from '../../services/marketDataCache';
 import { symbolTokenService } from '../../services/symbolTokenService';
@@ -26,7 +24,6 @@ export class PaperBroker extends BaseBroker {
 
   // Real Angel One client for market data
   private angelClient: AngelOneClient | null = null;
-  private telegramBot: TradingTelegramBot | null = null;
   private wsDataFeed: WebSocketDataFeed | null = null;
 
   // Track monitoring intervals to prevent leaks and duplicate monitoring
@@ -39,7 +36,7 @@ export class PaperBroker extends BaseBroker {
   constructor(
     initialBalance: number = 1000000,
     angelConfig?: BrokerConfig,
-    telegramConfig?: TelegramConfig,
+    _telegramConfig?: unknown,
     watchlist?: string[],
     marketStartTime?: string,
     marketEndTime?: string
@@ -51,11 +48,6 @@ export class PaperBroker extends BaseBroker {
     // Initialize real Angel One client for data fetching
     if (angelConfig) {
       this.angelClient = new AngelOneClient(angelConfig);
-    }
-
-    // Initialize Telegram bot for signal notifications
-    if (telegramConfig) {
-      this.telegramBot = new TradingTelegramBot(telegramConfig);
     }
 
     // Store watchlist for later use when creating MarketDataFetcher
@@ -162,18 +154,6 @@ export class PaperBroker extends BaseBroker {
       }
 
       // Start Telegram bot
-      if (this.telegramBot) {
-        await this.telegramBot.start();
-        await this.telegramBot.sendMessage(
-          '📊 *Paper Trading Mode Started*\n\n' +
-          '✅ Using REAL market data from Angel One\n' +
-          '📱 Signals will be sent to this chat\n' +
-          `💰 Starting Balance: ₹${this.startingBalance.toLocaleString('en-IN')}\n\n` +
-          '⚠️ No actual orders will be placed\n\n' +
-          '📡 Real-time WebSocket market data streaming'
-        );
-      }
-
       this.isConnected = true;
       logger.info('Paper broker connected (REAL data mode)');
       logger.audit('PAPER_BROKER_CONNECTED', {
@@ -198,19 +178,6 @@ export class PaperBroker extends BaseBroker {
 
     this.isConnected = false;
 
-    // Send final summary to Telegram
-    if (this.telegramBot) {
-      const stats = this.getAccountStats();
-      await this.telegramBot.sendMessage(
-        '🏁 *Paper Trading Session Ended*\n\n' +
-        `💰 Starting Balance: ₹${this.startingBalance.toLocaleString('en-IN')}\n` +
-        `💰 Final Balance: ₹${stats.currentBalance.toLocaleString('en-IN')}\n` +
-        `${stats.totalPnL >= 0 ? '📈' : '📉'} Total P&L: ₹${stats.totalPnL.toLocaleString('en-IN')} (${stats.totalPnLPercent.toFixed(2)}%)\n` +
-        `📊 Total Orders: ${this.orders.size}\n` +
-        `📦 Open Positions: ${this.positions.size}`
-      );
-      await this.telegramBot.stop();
-    }
 
     // Clear all data on disconnect
     this.orders.clear();
@@ -270,9 +237,6 @@ export class PaperBroker extends BaseBroker {
       this.orders.set(orderId, order);
       this.emitOrderUpdate(order);
 
-      // Send SIGNAL to Telegram instead of placing real order
-      await this.sendTelegramSignal(order, currentPrice);
-
       logger.info('Paper order signal sent', {
         orderId,
         symbol,
@@ -297,59 +261,6 @@ export class PaperBroker extends BaseBroker {
     }
   }
 
-  /**
-   * Send trading signal to Telegram
-   */
-  private async sendTelegramSignal(order: SimulatedOrder, currentPrice: number): Promise<void> {
-    if (!this.telegramBot) return;
-
-    const action = order.side === OrderSide.BUY ? '🟢 BUY' : '🔴 SELL';
-    const emoji = order.side === OrderSide.BUY ? '📈' : '📉';
-
-    let message = `${emoji} *TRADING SIGNAL*\n\n`;
-    message += `${action} ${order.symbol}\n\n`;
-    message += `📊 *Order Details:*\n`;
-    message += `• Type: ${order.type}\n`;
-    message += `• Quantity: ${order.quantity}\n`;
-    message += `• Current Price: ₹${currentPrice.toFixed(2)}\n`;
-
-    if (order.stopPrice) {
-      message += `• Stop Loss: ₹${order.stopPrice.toFixed(2)}\n`;
-    }
-
-    if (order.target) {
-      message += `• Target: ₹${order.target.toFixed(2)}\n`;
-    }
-
-    if (order.price && order.type === OrderType.LIMIT) {
-      message += `• Limit Price: ₹${order.price.toFixed(2)}\n`;
-    }
-
-    // Calculate potential risk/reward
-    if (order.stopPrice) {
-      const riskPerShare = Math.abs(currentPrice - order.stopPrice);
-      const totalRisk = riskPerShare * order.quantity;
-      const riskPercent = (riskPerShare / currentPrice) * 100;
-
-      message += `\n💰 *Risk Analysis:*\n`;
-      message += `• Risk per share: ₹${riskPerShare.toFixed(2)}\n`;
-      message += `• Total Risk: ₹${totalRisk.toFixed(2)}\n`;
-      message += `• Risk %: ${riskPercent.toFixed(2)}%\n`;
-    }
-
-    // Add account info
-    message += `\n💼 *Account:*\n`;
-    message += `• Balance: ₹${this.accountBalance.toLocaleString('en-IN')}\n`;
-    message += `• Open Positions: ${this.positions.size}\n`;
-
-    message += `\n⏰ Time: ${new Date().toLocaleTimeString('en-IN')}\n`;
-    message += `🆔 Order ID: ${order.orderId}\n`;
-
-    message += `\n⚠️ *This is a PAPER TRADING signal*\n`;
-    message += `📝 No actual order will be placed`;
-
-    await this.telegramBot.sendMessage(message);
-  }
 
   /**
    * Get real LTP from WebSocket cache or Angel One API (fallback)
@@ -529,40 +440,6 @@ export class PaperBroker extends BaseBroker {
     // Emit position_update so PositionManager can track closure
     this.emitPositionUpdate(closedPosition);
 
-    // Send Telegram notification
-    if (this.telegramBot) {
-      const emoji = exitReason === 'TARGET' ? '🎯' : '🛑';
-      const action = exitSide === OrderSide.SELL ? 'SELL' : 'BUY';
-      const pnlPercent = ((pnl / (position.entryPrice * position.quantity)) * 100);
-      const pnlEmoji = pnl >= 0 ? '✅' : '❌';
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-      });
-
-      let message = `${emoji} *BRACKET ORDER AUTO-EXIT*\n\n`;
-      message += `🕐 *Time:* ${timeStr}\n`;
-      message += `*Action:* ${action}\n`;
-      message += `*Symbol:* \`${symbol}\`\n`;
-      message += `*Reason:* ${exitReason === 'TARGET' ? '🎯 Target Reached' : '🛑 Stop-Loss Hit'}\n\n`;
-      message += `*Entry Price:* ₹${position.entryPrice.toFixed(2)}\n`;
-      message += `*Exit Price:* ₹${exitPrice.toFixed(2)}\n`;
-      message += `*Quantity:* ${position.quantity}\n`;
-      message += `*Order Value:* ₹${(exitPrice * position.quantity).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
-      message += `${pnlEmoji} *P&L:* ₹${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n\n`;
-
-      // Add current balance and open positions
-      message += `───────────────────\n`;
-      message += `*Account Balance:* ₹${this.accountBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
-      message += `*Open Positions:* ${this.positions.size}\n\n`;
-      message += `⚡ *Executed automatically by bracket order*`;
-
-      await this.telegramBot.sendMessage(message);
-    }
-
     logger.info('✅ Bracket order exit completed', {
       symbol,
       exitReason,
@@ -592,7 +469,7 @@ export class PaperBroker extends BaseBroker {
       order.status = OrderStatus.REJECTED;
       this.emitOrderUpdate(order);
       logger.warn('Paper order rejected (Simulated RMS)', { orderId, symbol: order.symbol });
-      this.telegramBot?.sendAlert('❌ Order Rejected', `Order ${orderId} rejected by RMS (Simulated)`);
+      logger.warn('Paper order rejected by simulated RMS', { orderId });
       return;
     }
 

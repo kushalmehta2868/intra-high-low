@@ -135,16 +135,16 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
     this.checkCooldownExpiry(data.symbol, state);
 
     // Set opening price AND initialize high/low on first data point.
-    // Use LTP only — NOT data.high/data.low — because the exchange's running day-high/low
-    // fields include pre-market/auction prices (e.g. ₹203.00 pre-open auction low while
-    // continuous-session low is ₹203.80), which would trigger a false breakout signal.
+    // data.high/data.low are the exchange's running day high/low — they include every
+    // trade since 9:15 AM, so a mid-session restart automatically picks up the correct
+    // full-day range from the very first tick.
     if (state.open === 0) {
       state.open = data.open || data.ltp;
-      state.dayHigh = data.ltp;
-      state.dayLow = data.ltp;
+      state.dayHigh = data.high;
+      state.dayLow  = data.low;
       state.prevLtp = data.ltp;
       state.lastTickAt = Date.now();
-      logger.info(`📊 [${data.symbol}] Day initialized from first tick (LTP-only range)`, {
+      logger.info(`📊 [${data.symbol}] Day initialized from first tick`, {
         open: `₹${state.open.toFixed(2)}`,
         dayHigh: `₹${state.dayHigh.toFixed(2)}`,
         dayLow: `₹${state.dayLow.toFixed(2)}`,
@@ -161,12 +161,9 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     this.checkForBreakout(data, state, prevDayHigh, prevDayLow);
 
-    // Now update current day's high/low
-    // NOTE: intentionally exclude data.high/data.low here — the exchange's running
-    // day-high field updates ahead of LTP, which would pre-inflate state.dayHigh and
-    // make the strict cross detection (ltp > prevDayHigh) impossible to satisfy.
-    state.dayHigh = Math.max(state.dayHigh, data.ltp);
-    state.dayLow = Math.min(state.dayLow, data.ltp);
+    // Keep range in sync with exchange running day high/low.
+    state.dayHigh = Math.max(state.dayHigh, data.high);
+    state.dayLow  = Math.min(state.dayLow,  data.low);
 
     // Log price levels every 5 minutes
     this.logPriceLevels(data, state);
