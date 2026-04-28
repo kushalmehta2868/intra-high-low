@@ -645,7 +645,9 @@ export class TradingEngine extends EventEmitter {
           //   quantity = min(riskQty, maxQty)
           let quantity = signal.quantity;
           if (!quantity) {
-            const MARGIN_MULTIPLIER = 5;
+            const MARGIN_MULTIPLIER = this.config.trading.riskLimits.useMargin
+              ? this.config.trading.riskLimits.marginMultiplier
+              : 1;
             const riskPct      = this.config.trading.riskLimits.maxRiskPerTradePercent || 1;
             const posSizePct   = this.config.trading.riskLimits.positionSizePercent || 10;
             const slDist       = Math.abs(adjustedEntryPrice - stopLoss);
