@@ -221,7 +221,7 @@ export class TradingEngine extends EventEmitter {
       // position.quantity is 0 here — use position.pnlPercent from the event.
       this.riskManager.recordTrade((position as any).grossPnL ?? position.pnl, {
         symbol: position.symbol,
-        side: position.type === "LONG" ? "SELL" : "BUY",
+        side: position.type === "LONG" ? "BUY" : "SELL",
         quantity: (position as any).closedQuantity,
         entryPrice: position.entryPrice,
         exitPrice: position.exitPrice ?? position.currentPrice,
@@ -245,7 +245,7 @@ export class TradingEngine extends EventEmitter {
         symbol: position.symbol,
         entryTime: position.entryTime,
         exitTime: position.exitTime || new Date(),
-        side: position.type === "LONG" ? "SELL" : "BUY",
+        side: position.type === "LONG" ? "BUY" : "SELL",
         entryPrice: position.entryPrice,
         exitPrice: exitPrice,
         quantity: (position as any).closedQuantity,
@@ -1355,7 +1355,6 @@ export class TradingEngine extends EventEmitter {
   private async sendDailySummaryReport(): Promise<void> {
     const stats = this.riskManager.getRiskStats();
     const trades = this.riskManager.getDailyTrades();
-    const balance = await this.broker.getAccountBalance();
 
     // Calculate trade statistics
     const winningTrades = trades.filter((t) => t.result === "WIN").length;
@@ -1371,6 +1370,10 @@ export class TradingEngine extends EventEmitter {
     const largestLoss =
       trades.length > 0 ? Math.min(...trades.map((t) => t.netPnL), 0) : 0;
 
+    // Derive ending balance from starting balance + net P&L so the summary is
+    // self-consistent (Ending − Starting == Net P&L) regardless of broker mode.
+    const endingBalance = this.initialBalance + stats.dailyPnL;
+
     await this.telegramBot.sendDailySummary({
       dailyPnL: stats.dailyPnL,
       totalTrades: trades.length,
@@ -1382,7 +1385,7 @@ export class TradingEngine extends EventEmitter {
       largestLoss,
       trades: trades,
       startingBalance: this.initialBalance,
-      endingBalance: balance,
+      endingBalance,
     });
 
     logger.info("📊 Daily summary report sent", {

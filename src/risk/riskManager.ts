@@ -189,7 +189,9 @@ export class RiskManager extends EventEmitter {
         grossPnL: grossPnL,
         netPnL: netPnL,
         charges: charges,
-        pnlPercent: tradeDetails.pnlPercent || 0,
+        pnlPercent: (tradeDetails.entryPrice && tradeDetails.quantity)
+          ? (netPnL / (tradeDetails.entryPrice * tradeDetails.quantity)) * 100
+          : (tradeDetails.pnlPercent || 0),
         entryTime: tradeDetails.entryTime || new Date(),
         exitTime: tradeDetails.exitTime || new Date(),
         result: netPnL > 0 ? 'WIN' : 'LOSS' // Strict, slightly positive is win, even 0 is break-even but simplified
