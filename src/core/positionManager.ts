@@ -7,6 +7,9 @@ import { chargesCalculator } from '../services/chargesCalculator';
 export class PositionManager extends EventEmitter {
   private positions: Map<string, Position> = new Map();
   private broker: IBroker;
+  // When bracket-order monitoring (PaperBroker) is active, SL/target checks
+  // inside updateMarketPrices must be silenced to prevent duplicate closes.
+  private slMonitoringEnabled: boolean = true;
 
   constructor(broker: IBroker) {
     super();
@@ -35,6 +38,13 @@ export class PositionManager extends EventEmitter {
     const existingPosition = this.positions.get(trade.symbol);
 
     if (!existingPosition) {
+      // Guard: a stale close order whose position was already removed by bracket
+      // monitoring must not re-open it as a new entry. A 0-quantity trade is also a no-op.
+      if (trade.quantity === 0) {
+        logger.warn('Stale/zero-qty trade ignored', { symbol: trade.symbol, side: trade.side });
+        return;
+      }
+
       const newPosition: Position = {
         symbol: trade.symbol,
         type: trade.side === OrderSide.BUY ? PositionType.LONG : PositionType.SHORT,
@@ -156,6 +166,24 @@ export class PositionManager extends EventEmitter {
   }
 
   private updatePosition(position: Position): void {
+    // A qty=0 update from the broker (e.g. bracket order auto-exit) means the position
+    // was closed externally. Treat it as a close so position_closed fires with correct data.
+    if (position.quantity <= 0) {
+      const existing = this.positions.get(position.symbol);
+      this.positions.delete(position.symbol);
+      if (existing && existing.quantity > 0) {
+        this.emit('position_closed', {
+          ...existing,
+          ...position,
+          quantity: 0,
+          closedQuantity: existing.quantity,
+          grossPnL: position.pnl ?? 0,
+          exitPrice: position.exitPrice ?? position.currentPrice,
+          exitTime: position.exitTime ?? new Date(),
+        });
+      }
+      return;
+    }
     this.positions.set(position.symbol, position);
     this.emit('position_updated', position);
   }
@@ -165,7 +193,7 @@ export class PositionManager extends EventEmitter {
   }
 
   public getAllPositions(): Position[] {
-    return Array.from(this.positions.values());
+    return Array.from(this.positions.values()).filter(p => p.quantity > 0);
   }
 
   public hasPosition(symbol: string): boolean {
@@ -193,6 +221,11 @@ export class PositionManager extends EventEmitter {
     }
   }
 
+  /** Call once at startup in paper mode — bracket-order monitoring owns SL/target exits. */
+  public disableSLMonitoring(): void {
+    this.slMonitoringEnabled = false;
+  }
+
   public async updateMarketPrices(): Promise<void> {
     for (const position of this.positions.values()) {
       try {
@@ -211,7 +244,7 @@ export class PositionManager extends EventEmitter {
 
           this.emit('position_updated', position);
 
-          if (position.stopLoss && this.shouldTriggerStopLoss(position, ltp)) {
+          if (this.slMonitoringEnabled && position.stopLoss && this.shouldTriggerStopLoss(position, ltp)) {
             this.emit('stop_loss_triggered', position);
             logger.warn('Stop loss triggered', {
               symbol: position.symbol,
@@ -220,7 +253,7 @@ export class PositionManager extends EventEmitter {
             });
           }
 
-          if (position.target && this.shouldTriggerTarget(position, ltp)) {
+          if (this.slMonitoringEnabled && position.target && this.shouldTriggerTarget(position, ltp)) {
             this.emit('target_reached', position);
             logger.info('Target reached', {
               symbol: position.symbol,

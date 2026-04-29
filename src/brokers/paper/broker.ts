@@ -396,6 +396,16 @@ export class PaperBroker extends BaseBroker {
     exitPrice: number,
     exitReason: 'STOP_LOSS' | 'TARGET'
   ): Promise<void> {
+    // Atomically claim the position. If it's already been removed by a concurrent
+    // close (e.g. a manual square-off order that filled before this tick ran),
+    // bail out immediately to prevent a double balance update.
+    if (!this.positions.has(symbol)) {
+      logger.warn(`[BracketOrder] ${symbol} already closed — skipping duplicate auto-exit`);
+      return;
+    }
+    // Remove first so any concurrent monitoring tick sees it as gone.
+    this.positions.delete(symbol);
+
     // Create exit order
     const exitSide = position.type === PositionType.LONG ? OrderSide.SELL : OrderSide.BUY;
     const orderId = this.generateOrderId();
@@ -430,12 +440,12 @@ export class PaperBroker extends BaseBroker {
       ...position,
       quantity: 0,
       currentPrice: exitPrice,
+      exitPrice,
+      exitTime: new Date(),
+      exitReason: exitReason === 'STOP_LOSS' ? 'Stop loss triggered' : 'Target reached',
       pnl: pnl,
-      pnlPercent: (pnl / (position.entryPrice * position.quantity)) * 100
+      pnlPercent: (pnl / (position.entryPrice * position.quantity)) * 100,
     };
-
-    // Remove position
-    this.positions.delete(symbol);
 
     // Emit position_update so PositionManager can track closure
     this.emitPositionUpdate(closedPosition);
@@ -573,6 +583,13 @@ export class PaperBroker extends BaseBroker {
     const existingPosition = this.positions.get(order.symbol);
 
     if (!existingPosition) {
+      // A close order (no stopPrice/target) whose position was already removed by
+      // bracket-order monitoring should not re-open the position as a new entry.
+      if (!order.stopPrice && !order.target && order.quantity > 0) {
+        logger.warn(`[PaperBroker] Stale close order filled for ${order.symbol} — position already gone, skipping`);
+        return;
+      }
+
       const newPosition: Position = {
         symbol: order.symbol,
         type: order.side === OrderSide.BUY ? PositionType.LONG : PositionType.SHORT,

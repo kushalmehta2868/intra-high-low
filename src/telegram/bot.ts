@@ -171,23 +171,31 @@ ${message}
       ? `${Math.floor(holdMin / 60)}h ${holdMin % 60}m`
       : `${holdMin}m`;
 
-    const exitValue = position.quantity * exitPrice;
+    // Use closedQuantity when position.quantity has already been zeroed out
+    const displayQty  = (position as any).closedQuantity > 0
+      ? (position as any).closedQuantity
+      : position.quantity;
+    const exitValue = displayQty * exitPrice;
 
-    // R:R achieved: how many rupees gained/lost per rupee risked
+    // R:R achieved: signed — positive = profit multiple of risk, negative = loss
     let rrStr = 'N/A';
     if (position.stopLoss && position.stopLoss > 0) {
       const riskPerShare   = Math.abs(position.entryPrice - position.stopLoss);
-      const returnPerShare = Math.abs(exitPrice - position.entryPrice);
-      if (riskPerShare > 0) rrStr = (returnPerShare / riskPerShare).toFixed(2);
+      const signedReturn   = (exitPrice - position.entryPrice) * (isLong ? 1 : -1);
+      if (riskPerShare > 0) rrStr = (signedReturn / riskPerShare).toFixed(2);
     }
+
+    const pnlPctStr = isFinite(pnlPercent)
+      ? `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+      : 'N/A';
 
     let msg = `${pnlEmoji} *EXIT ${sideLabel} — ${position.symbol.replace('-EQ', '')}*\n\n`;
     msg += `🕐 *Time:* ${timeStr}\n`;
     msg += `${reasonLabel}\n`;
     msg += `⏱ *Held:* ${holdStr}\n\n`;
     msg += `*Entry:* ₹${position.entryPrice.toFixed(2)} → *Exit:* ₹${exitPrice.toFixed(2)}\n`;
-    msg += `*Qty:* ${position.quantity}  |  *Value:* ₹${exitValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
-    msg += `${pnlEmoji} *P&L:* ₹${pnl >= 0 ? '+' : ''}${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n`;
+    msg += `*Qty:* ${displayQty}  |  *Value:* ₹${exitValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+    msg += `${pnlEmoji} *P&L:* ₹${pnl >= 0 ? '+' : ''}${pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })} (${pnlPctStr})\n`;
     msg += `*R:R achieved:* ${rrStr}\n`;
 
     if (position.stopLoss || position.target) {

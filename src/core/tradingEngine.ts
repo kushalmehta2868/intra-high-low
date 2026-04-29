@@ -694,7 +694,13 @@ export class TradingEngine extends EventEmitter {
             const riskQty      = slDist > 0 ? Math.floor(riskAmount / slDist) : 0;
             const maxCapital   = (posSizePct / 100) * currentBalance * MARGIN_MULTIPLIER;
             const maxQty       = Math.floor(maxCapital / adjustedEntryPrice);
-            quantity           = Math.min(riskQty, maxQty);
+            const rawQty       = Math.min(riskQty, maxQty);
+
+            // If risk formula rounds to 0 but balance can cover at least 1 share,
+            // fall back to 1 so the signal isn't silently dropped.
+            // The downstream risk check will still reject if 1 share violates limits.
+            const canAffordOne = maxCapital >= adjustedEntryPrice;
+            quantity = rawQty === 0 && canAffordOne ? 1 : rawQty;
 
             logger.info("Quantity calculated (risk-based)", {
               symbol:     signal.symbol,
@@ -704,13 +710,21 @@ export class TradingEngine extends EventEmitter {
               riskAmt:    `₹${riskAmount.toFixed(2)}`,
               riskQty,
               maxQty,
+              rawQty,
               finalQty:   quantity,
+              fallbackToOne: rawQty === 0 && canAffordOne,
               orderValue: `₹${(quantity * adjustedEntryPrice).toFixed(2)}`,
             });
           }
 
           if (quantity === 0) {
-            logger.warn("Calculated quantity is 0", { signal });
+            // This only fires when balance is too low to buy even 1 share at the
+            // current position-size limit (e.g. stock price > maxCapital).
+            logger.warn("Calculated quantity is 0 — balance too low to cover 1 share at current position-size limit", {
+              symbol: signal.symbol,
+              price: `₹${adjustedEntryPrice.toFixed(2)}`,
+              balance: `₹${currentBalance.toFixed(2)}`,
+            });
             orderIdempotencyManager.markOrderFailed(orderKey, "Zero quantity");
             return;
           }
@@ -1237,7 +1251,9 @@ export class TradingEngine extends EventEmitter {
 
   private async sendLiveStatusNow(): Promise<void> {
     try {
-      await this.positionManager.updateMarketPrices();
+      // Prices are already kept fresh by the market_data WebSocket handler on every tick.
+      // Calling updateMarketPrices() here would race with bracket-order monitoring and
+      // could show positions as "open" that are in the process of being closed.
       const balance   = await this.broker.getAccountBalance();
       const positions = this.positionManager.getAllPositions();
       const stats     = this.riskManager.getRiskStats();
@@ -1567,6 +1583,14 @@ export class TradingEngine extends EventEmitter {
 
     // FIX #4: Start heartbeat monitoring
     this.heartbeatMonitor.start();
+
+    // In paper mode, PaperBroker's bracket-order monitoring (every 1 s) owns all
+    // SL/target exits. Disable the duplicate SL checks inside updateMarketPrices so
+    // the two mechanisms never race and double-close the same position.
+    if (this.config.trading.mode === TradingMode.PAPER) {
+      this.positionManager.disableSLMonitoring();
+      logger.info("✅ SL monitoring delegated to bracket-order monitor (paper mode)");
+    }
 
     // FIX #3: Start stop-loss monitoring (REAL mode only)
     if (this.config.trading.mode === TradingMode.REAL) {
