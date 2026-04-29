@@ -629,6 +629,12 @@ export class PaperBroker extends BaseBroker {
 
         if (existingPosition.quantity === 0) {
           this.positions.delete(order.symbol);
+          this.emitPositionUpdate({
+            ...existingPosition,
+            currentPrice: fillPrice,
+            exitPrice: fillPrice,
+            exitTime: new Date(),
+          });
         } else {
           this.emitPositionUpdate(existingPosition);
         }
