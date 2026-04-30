@@ -507,10 +507,10 @@ export class TradingEngine extends EventEmitter {
       return;
     }
 
-    // CRITICAL: Only generate signals during 9:30 AM - 3:00 PM
+    // CRITICAL: Only generate signals during 9:45 AM - 3:00 PM
     if (!this.scheduler.isSignalGenerationHours()) {
       logger.info(
-        "Signal ignored - outside signal generation hours (9:30 AM - 3:00 PM)",
+        "Signal ignored - outside signal generation hours (9:45 AM - 3:00 PM)",
         {
           symbol: signal.symbol,
           action: signal.action,

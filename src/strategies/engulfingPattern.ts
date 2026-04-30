@@ -249,10 +249,10 @@ export class EngulfingPatternStrategy extends BaseStrategy {
     return istNow.getHours() >= 15;
   }
 
-  /** Returns true before 09:30 IST — skip opening volatility window. */
+  /** Returns true before 09:45 IST — skip opening volatility window. */
   private isBeforeSignalStart(): boolean {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    return istNow.getHours() < 9 || (istNow.getHours() === 9 && istNow.getMinutes() < 30);
+    return istNow.getHours() < 9 || (istNow.getHours() === 9 && istNow.getMinutes() < 45);
   }
 
   public getSnapshot(): EngulfingSnapshot[] {

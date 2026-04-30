@@ -35,7 +35,7 @@ class ConfigManager {
       autoSquareOffTime: process.env.AUTO_SQUARE_OFF_TIME || "15:15",
       marketStartTime: process.env.MARKET_START_TIME || "09:15",
       marketEndTime: process.env.MARKET_END_TIME || "15:30",
-      signalStartTime: process.env.SIGNAL_START_TIME || "09:30",
+      signalStartTime: process.env.SIGNAL_START_TIME || "09:45",
       signalEndTime: process.env.SIGNAL_END_TIME || "14:45",
       killSwitch: process.env.KILL_SWITCH === "true",
       riskLimits: {
