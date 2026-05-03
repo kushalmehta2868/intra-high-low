@@ -41,7 +41,6 @@ export interface EMACrossoverSnapshot {
  * Called by CandleDataService via handleCandleUpdate() — NOT tick-based.
  */
 export class EMACrossoverStrategy extends BaseStrategy {
-  private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
   private dayStates: Map<string, DayState> = new Map();
   private watchlist: string[];
   private snapshots: Map<string, EMACrossoverSnapshot> = new Map();
@@ -72,8 +71,6 @@ export class EMACrossoverStrategy extends BaseStrategy {
 
     const state = this.getOrCreateState(symbol);
     this.resetIfNewDay(state);
-    if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
-
     // Skip opening volatility window and end-of-day
     if (this.isBeforeSignalStart()) return;
     if (this.isAfterMarketCutoff()) return;
@@ -211,7 +208,7 @@ export class EMACrossoverStrategy extends BaseStrategy {
       sl: sl.toFixed(2),
       target: target.toFixed(2),
       confidence: confidence.toFixed(2),
-      tradesUsed: `${state.tradesExecutedToday}/${this.MAX_TRADES_PER_STOCK_PER_DAY}`,
+      tradesExecutedToday: state.tradesExecutedToday,
     });
     logger.audit('STRATEGY_SIGNAL', { strategy: this.name, signal });
 

@@ -259,7 +259,6 @@ function s3_vwapPullback(candles: Candle[], price: number): Vote {
  * Confidence: 0.67 = 2/3 agree, 1.0 = 3/3 agree.
  */
 export class ConfluenceStrategy extends BaseStrategy {
-  private readonly MAX_TRADES_PER_STOCK_PER_DAY = 2;
   private dayStates: Map<string, DayState> = new Map();
   private watchlist: string[];
   private snapshots: Map<string, ConfluenceSnapshot> = new Map();
@@ -286,8 +285,6 @@ export class ConfluenceStrategy extends BaseStrategy {
 
     const state = this.getOrCreateState(symbol);
     this.resetIfNewDay(state);
-    if (state.tradesExecutedToday >= this.MAX_TRADES_PER_STOCK_PER_DAY) return;
-
     if (this.isBeforeSignalStart()) return;
     if (this.isAfterMarketCutoff()) return;
 
@@ -380,7 +377,7 @@ export class ConfluenceStrategy extends BaseStrategy {
       target:     target.toFixed(2),
       confidence: `${(confidence * 100).toFixed(0)}%`,
       adx:        adx !== null ? adx.toFixed(1) : 'N/A',
-      tradesUsed: `${state.tradesExecutedToday}/${this.MAX_TRADES_PER_STOCK_PER_DAY}`,
+      tradesExecutedToday: state.tradesExecutedToday,
     });
     logger.audit('STRATEGY_SIGNAL', { strategy: this.name, signal });
 

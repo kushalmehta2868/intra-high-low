@@ -1682,8 +1682,7 @@ export class TradingEngine extends EventEmitter {
       `*Strategies:* ${this.strategies.size}\n` +
       `*Watchlist:* ${this.watchlist.length} symbols\n\n` +
       `*Max Risk/Trade:* ${rl.maxRiskPerTradePercent}%\n` +
-      `*Max Daily Loss:* ${rl.maxDailyLossPercent}%\n` +
-      `*Max Trades/Day:* ${rl.maxTradesPerDay}\n\n` +
+      `*Max Daily Loss:* ${rl.maxDailyLossPercent}%\n\n` +
       (this.scheduler.isMarketHours()
         ? "🟢 Market is OPEN — trading active"
         : "🔴 Market is CLOSED — waiting for market open")
