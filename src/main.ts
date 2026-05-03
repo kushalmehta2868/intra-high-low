@@ -90,6 +90,8 @@ async function main() {
       'TRENT-EQ',
       // New Economy
       'ETERNAL-EQ',
+      // Insurance
+      'HDFCLIFE-EQ',
     ];
 
     const initialBalance = 50000;

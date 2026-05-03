@@ -1,11 +1,33 @@
 import { BaseBroker } from '../base';
 import { Order, Position, OrderSide, OrderType, OrderStatus, PositionType, Trade, BrokerConfig, MarketData } from '../../types';
 import { logger } from '../../utils/logger';
+import { tradeJournal } from '../../utils/tradeJournal';
 import { AngelOneClient } from '../angelone/client';
 import { WebSocketDataFeed } from '../../services/websocketDataFeed';
 import { marketDataCache } from '../../services/marketDataCache';
 import { symbolTokenService } from '../../services/symbolTokenService';
 import { configManager } from '../../config';
+
+// ── Slippage tier sets (symbol names without -EQ suffix, uppercase) ──────────
+const NIFTY50_SYMBOLS = new Set([
+  'RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL',
+  'ITC','KOTAKBANK','LT','AXISBANK','HCLTECH','BAJFINANCE','ASIANPAINT','MARUTI',
+  'SUNPHARMA','TITAN','ULTRACEMCO','WIPRO','NESTLEIND','TECHM','M&M','POWERGRID',
+  'NTPC','ONGC','COALINDIA','BAJAJFINSV','HDFCLIFE','GRASIM','ADANIENT',
+  'ADANIPORTS','CIPLA','EICHERMOT','HEROMOTOCO','BRITANNIA','JSWSTEEL','TATACONSUM',
+  'TMPV','TATASTEEL','APOLLOHOSP','BAJAJ-AUTO','INDUSINDBK','DRREDDY',
+  'BPCL','SHRIRAMFIN','TRENT','HINDALCO','BEL','ETERNAL',
+]);
+
+const NIFTY_NEXT50_SYMBOLS = new Set([
+  'AMBUJACEM','AUROPHARMA','BANKBARODA','BERGEPAINT','BOSCHLTD','CANBK','CHOLAFIN',
+  'COLPAL','COFORGE','CUMMINSIND','DABUR','DMART','GAIL','GODREJCP','HAVELLS',
+  'ICICIPRULI','ICICIGI','IDFCFIRSTB','INDIGO','INDUSTOWER','IRCTC',
+  'JINDALSTEL','LUPIN','MARICO','MCDOWELL-N','MUTHOOTFIN','NMDC','OBEROIRLTY',
+  'OFSS','PAGEIND','PEL','PETRONET','PIDILITIND','PIIND','PNB','RECLTD','SIEMENS',
+  'SRF','TORNTPHARM','TVSMOTOR','UBL','UNIONBANK','UNITDSPR','VBL','VOLTAS',
+  'ZYDUSLIFE','ANGELONE','ABB','HDFCAMC',
+]);
 
 interface SimulatedOrder extends Order {
   submittedAt: Date;
@@ -468,6 +490,20 @@ export class PaperBroker extends BaseBroker {
       quantity: position.quantity,
       pnl
     });
+
+    // Record exit in trade journal so backtest can pair entry/exit by tradeId
+    const tradeId = (position as any).__tradeId;
+    if (tradeId) {
+      tradeJournal.logExit({
+        tradeId,
+        symbol,
+        side:       position.type === PositionType.LONG ? 'BUY' : 'SELL',
+        entryPrice: position.entryPrice,
+        exitPrice,
+        quantity:   position.quantity,
+        paper:      true,
+      }, exitReason === 'TARGET' ? 'TAKE_PROFIT' : 'STOP_LOSS');
+    }
   }
 
   private simulateOrderExecution(orderId: string, executionPrice: number): void {
@@ -484,9 +520,11 @@ export class PaperBroker extends BaseBroker {
     }
 
     if (order.type === OrderType.MARKET || order.type === OrderType.LIMIT) {
-      // SIMULATION 2: Realistic Slippage (0.1% to 0.5%)
-      // Direction depends on order side: Buy pays more, Sell gets less
-      const slippagePercent = (Math.random() * 0.004) + 0.001; // 0.1% to 0.5%
+      // SIMULATION 2: Tiered Slippage by Liquidity (matches crypto-bot model)
+      // Tier 1 — Nifty 50 large-caps: 0.03–0.08% (deep NSE order books)
+      // Tier 2 — Nifty Next 50 / known mid-caps: 0.08–0.18%
+      // Tier 3 — Remaining / smaller stocks: 0.15–0.35%
+      const slippagePercent = PaperBroker.getSlippagePct(order.symbol);
       const slippageAmount = executionPrice * slippagePercent;
 
       let fillPrice = executionPrice;
@@ -613,6 +651,21 @@ export class PaperBroker extends BaseBroker {
       // Simulate bracket order behavior - set up auto-exit monitoring
       if (order.stopPrice || order.target) {
         this.setupBracketOrderMonitoring(order.symbol, newPosition);
+
+        // Record signal entry in trade journal for backtest analysis
+        const tradeId = `paper_${order.orderId}`;
+        (newPosition as any).__tradeId = tradeId;
+        tradeJournal.logSignal({
+          tradeId,
+          symbol:     order.symbol,
+          strategy:   'paper',
+          side:       order.side === OrderSide.BUY ? 'BUY' : 'SELL',
+          entryPrice: fillPrice,
+          stopLoss:   order.stopPrice ?? fillPrice,
+          target:     order.target   ?? fillPrice,
+          quantity:   order.filledQuantity,
+          paper:      true,
+        });
       }
     } else {
       if ((existingPosition.type === PositionType.LONG && order.side === OrderSide.SELL) ||
@@ -761,6 +814,23 @@ export class PaperBroker extends BaseBroker {
 
       this.emitPositionUpdate(position);
     }
+  }
+
+  /**
+   * Returns a random slippage fraction for the given symbol based on its liquidity tier.
+   * Tier 1 — Nifty 50 large-caps: 0.03–0.08%   (deep order books, tight spreads)
+   * Tier 2 — Nifty Next 50 / known mid-caps: 0.08–0.18%
+   * Tier 3 — Remaining / smaller stocks: 0.15–0.35%
+   */
+  private static getSlippagePct(symbol: string): number {
+    const base = symbol.replace(/-EQ$/i, '').toUpperCase();
+    if (NIFTY50_SYMBOLS.has(base)) {
+      return 0.0003 + Math.random() * 0.0005;  // 0.03–0.08%
+    }
+    if (NIFTY_NEXT50_SYMBOLS.has(base)) {
+      return 0.0008 + Math.random() * 0.001;   // 0.08–0.18%
+    }
+    return 0.0015 + Math.random() * 0.002;     // 0.15–0.35%
   }
 
   /**
