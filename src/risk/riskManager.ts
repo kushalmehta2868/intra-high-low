@@ -65,14 +65,7 @@ export class RiskManager extends EventEmitter {
   ): RiskCheckResult {
     this.resetDailyCounters();
 
-    // 1. Check Max Daily Trades (system-wide cap across all symbols)
-    if (this.tradesExecutedToday >= this.riskLimits.maxTradesPerDay) {
-      const reason = `Max trades per day limit reached (${this.riskLimits.maxTradesPerDay})`;
-      logger.warn('Risk check failed', { reason, tradesExecutedToday: this.tradesExecutedToday });
-      return { allowed: false, reason };
-    }
-
-    // 2. Check Max Open Positions (New Block)
+    // 1. Check Max Open Positions
     // Hard limit of 5 concurrent positions for risk diversification
     const MAX_OPEN_POSITIONS = 5;
     if (currentOpenPositions >= MAX_OPEN_POSITIONS) {

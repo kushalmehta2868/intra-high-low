@@ -24,7 +24,6 @@ interface SymbolState {
   hasBrokenHighToday: boolean;
   hasBrokenLowToday: boolean;
 
-  // Hard cap: max 2 trades per stock per calendar day
   tradesExecutedToday: number;
 
   // Cooldown after position close
@@ -217,23 +216,12 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
         // Persist updated state after cooldown expires
         this.saveSymbolState(symbol, state);
 
-        const MAX_TRADES_PER_STOCK_PER_DAY = 2;
-        const remainingTrades = MAX_TRADES_PER_STOCK_PER_DAY - state.tradesExecutedToday;
-
-        if (remainingTrades > 0) {
-          // Allow re-entry in both directions for remaining trade slots
-          state.hasBrokenHighToday = false;
-          state.hasBrokenLowToday = false;
-          logger.info(
-            `⏰ [${symbol}] Cooldown ended - ready for new signals (${remainingTrades} trade(s) remaining today)`,
-            { cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} min` },
-          );
-        } else {
-          // Daily cap reached — cooldown cleared but no new signals allowed
-          logger.info(
-            `⏰ [${symbol}] Cooldown ended - daily trade limit reached (${MAX_TRADES_PER_STOCK_PER_DAY}/${MAX_TRADES_PER_STOCK_PER_DAY}), no more signals today`,
-          );
-        }
+        state.hasBrokenHighToday = false;
+        state.hasBrokenLowToday = false;
+        logger.info(
+          `⏰ [${symbol}] Cooldown ended - ready for new signals`,
+          { cooldownDuration: `${(timeSinceClose / 60000).toFixed(1)} min` },
+        );
       }
     }
   }
@@ -338,12 +326,6 @@ export class DayHighLowBreakoutStrategy extends BaseStrategy {
 
     // Skip if symbol is in cooldown period
     if (state.isInCooldown) {
-      return;
-    }
-
-    // Hard cap: maximum 2 trades per stock per day
-    const MAX_TRADES_PER_STOCK_PER_DAY = 2;
-    if (state.tradesExecutedToday >= MAX_TRADES_PER_STOCK_PER_DAY) {
       return;
     }
 
