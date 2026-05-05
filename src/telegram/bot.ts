@@ -315,6 +315,9 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     winRate: number;
     dailyLossPercent: number;
     maxDailyLossPercent: number;
+    tradesRemaining?: number;
+    minsToSquareOff?: number;
+    strategyStats?: Array<{ name: string; trades: number; wins: number; losses: number; pnl: number }>;
   }): Promise<void> {
     const timeStr = new Date().toLocaleTimeString('en-IN', {
       timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
@@ -353,7 +356,18 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     msg += `Closed: ${data.totalTrades}  ✅ ${data.winningTrades}W  ❌ ${data.losingTrades}L`;
     if (data.totalTrades > 0) msg += `  WR: ${data.winRate.toFixed(0)}%`;
     msg += `\n`;
-    msg += `Open:   ${data.openPositions.length} position${data.openPositions.length !== 1 ? 's' : ''}\n\n`;
+    msg += `Open:   ${data.openPositions.length} position${data.openPositions.length !== 1 ? 's' : ''}`;
+    if (data.tradesRemaining !== undefined) msg += `  |  ${data.tradesRemaining} slots left`;
+    msg += `\n`;
+    if (data.minsToSquareOff !== undefined && data.minsToSquareOff > 0) {
+      const h = Math.floor(data.minsToSquareOff / 60);
+      const m = data.minsToSquareOff % 60;
+      const countdown = h > 0 ? `${h}h ${m}m` : `${m}m`;
+      msg += `⏳ Square-off in: ${countdown}\n`;
+    } else if (data.minsToSquareOff === 0) {
+      msg += `⚠️ Square-off time reached\n`;
+    }
+    msg += `\n`;
 
     // Open positions
     if (data.openPositions.length > 0) {
@@ -370,6 +384,19 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
         if (p.stopLoss)  msg += `  SL ₹${p.stopLoss.toFixed(2)}`;
         if (p.target)    msg += `  TP ₹${p.target.toFixed(2)}`;
         if (p.stopLoss || p.target) msg += `\n`;
+      }
+      msg += `\n`;
+    }
+
+    // Strategy breakdown
+    if (data.strategyStats && data.strategyStats.length > 0 && data.totalTrades > 0) {
+      msg += `${'─'.repeat(28)}\n`;
+      msg += `🧠 *By Strategy*\n`;
+      for (const s of data.strategyStats) {
+        const wr = s.trades > 0 ? Math.round((s.wins / s.trades) * 100) : 0;
+        const pnlSign = s.pnl >= 0 ? '+' : '';
+        const shortName = s.name.replace(/Strategy$/i, '').replace(/Breakout$/i, 'BO').trim();
+        msg += `${s.pnl >= 0 ? '🟢' : '🔴'} *${shortName}*  ${s.wins}W/${s.losses}L  WR:${wr}%  ₹${pnlSign}${s.pnl.toFixed(0)}\n`;
       }
       msg += `\n`;
     }
@@ -392,9 +419,19 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     winRate: number;
     largestWin: number;
     largestLoss: number;
+    avgWin?: number;
+    avgLoss?: number;
+    profitFactor?: number;
+    evPerTrade?: number;
+    totalCharges?: number;
+    maxConsecLosses?: number;
+    avgHoldAll?: number;
+    avgHoldWins?: number;
+    avgHoldLoss?: number;
     trades: any[];
     startingBalance: number;
     endingBalance: number;
+    strategyStats?: Array<{ name: string; trades: number; wins: number; losses: number; pnl: number }>;
   }): Promise<void> {
     const emoji = data.dailyPnL >= 0 ? '📈' : '📉';
     const pnlEmoji = data.dailyPnL >= 0 ? '✅' : '❌';
@@ -412,6 +449,8 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
     message += `💵 Ending: ₹${data.endingBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
 
     // Trade Statistics
+    const fmtMins = (m: number) => m < 1 ? '<1m' : m >= 60 ? `${Math.floor(m / 60)}h ${Math.round(m % 60)}m` : `${Math.round(m)}m`;
+
     message += `📊 *Trade Statistics*\n`;
     message += `Total Trades: ${data.totalTrades}\n`;
     message += `✅ Wins: ${data.winningTrades}\n`;
@@ -421,7 +460,64 @@ ${stats.isAtRiskLimit ? '🔴 *AT RISK LIMIT*' : '🟢 Within limits'}
 
     if (data.totalTrades > 0) {
       message += `🏆 Largest Win: ₹${data.largestWin.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
-      message += `💔 Largest Loss: ₹${Math.abs(data.largestLoss).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n`;
+      message += `💔 Largest Loss: ₹${Math.abs(data.largestLoss).toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n`;
+      if (data.avgWin !== undefined && data.avgLoss !== undefined) {
+        message += `📊 Avg Win: ₹${data.avgWin.toFixed(2)}  |  Avg Loss: ₹${data.avgLoss.toFixed(2)}\n`;
+      }
+      message += `\n`;
+    }
+
+    if (data.totalTrades > 0) {
+      // Quality metrics
+      message += `⚙️ *Edge Metrics*\n`;
+      if (data.profitFactor !== undefined) {
+        const pf = data.profitFactor >= 99 ? '∞' : data.profitFactor.toFixed(2);
+        const pfEmoji = data.profitFactor >= 1.5 ? '✅' : data.profitFactor >= 1.0 ? '⚠️' : '❌';
+        message += `${pfEmoji} Profit Factor: ${pf}\n`;
+      }
+      if (data.evPerTrade !== undefined) {
+        const evEmoji = data.evPerTrade >= 0 ? '✅' : '❌';
+        message += `${evEmoji} EV/Trade: ₹${data.evPerTrade >= 0 ? '+' : ''}${data.evPerTrade.toFixed(2)}\n`;
+      }
+      if (data.maxConsecLosses !== undefined) {
+        const clEmoji = data.maxConsecLosses >= 5 ? '🚨' : data.maxConsecLosses >= 3 ? '⚠️' : '✅';
+        message += `${clEmoji} Max Consec. Losses: ${data.maxConsecLosses}\n`;
+      }
+      if (data.totalCharges !== undefined && data.totalCharges > 0) {
+        message += `💸 Total Charges: ₹${data.totalCharges.toFixed(2)}\n`;
+      }
+      message += `\n`;
+
+      // Hold time
+      if (data.avgHoldAll !== undefined && data.avgHoldAll > 0) {
+        message += `⏱️ *Avg Hold Time*\n`;
+        message += `All:    ${fmtMins(data.avgHoldAll)}\n`;
+        if (data.avgHoldWins !== undefined && data.winningTrades > 0)
+          message += `Wins:   ${fmtMins(data.avgHoldWins)}\n`;
+        if (data.avgHoldLoss !== undefined && data.losingTrades > 0)
+          message += `Losses: ${fmtMins(data.avgHoldLoss)}\n`;
+        message += `\n`;
+      }
+    }
+
+    // Strategy Breakdown
+    if (data.strategyStats && data.strategyStats.length > 0) {
+      message += `━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `🧠 *Strategy Breakdown*\n\n`;
+      message += `\`\`\`\n`;
+      message += `Strategy       T   W  L   WR%    P&L\n`;
+      message += `─────────────────────────────────────\n`;
+      for (const s of data.strategyStats) {
+        const wr = s.trades > 0 ? Math.round((s.wins / s.trades) * 100) : 0;
+        const shortName = s.name.replace(/Strategy$/i, '').replace(/Breakout$/i, 'BO').trim().padEnd(14);
+        const t   = String(s.trades).padStart(2);
+        const w   = String(s.wins).padStart(3);
+        const l   = String(s.losses).padStart(2);
+        const wrS = (String(wr) + '%').padStart(5);
+        const pnl = ((s.pnl >= 0 ? '+' : '') + s.pnl.toFixed(0)).padStart(7);
+        message += `${shortName} ${t} ${w} ${l} ${wrS} ${pnl}\n`;
+      }
+      message += `\`\`\`\n\n`;
     }
 
     // Trade Details Table

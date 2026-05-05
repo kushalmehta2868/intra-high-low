@@ -20,6 +20,12 @@ export class HeartbeatMonitor extends EventEmitter {
   private isFirstData: boolean = true;
 
   public start(): void {
+    // Guard against orphaned intervals from multiple start() calls
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.monitorInterval = null;
+    }
+
     logger.info('🫀 Heartbeat monitor started', {
       alertThreshold: `${this.ALERT_THRESHOLD_MS / 1000} seconds`,
       checkInterval: `${this.CHECK_INTERVAL_MS / 1000} seconds`

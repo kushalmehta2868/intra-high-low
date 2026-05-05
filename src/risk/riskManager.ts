@@ -21,6 +21,7 @@ export interface TradeRecord {
   entryTime: Date;
   exitTime: Date;
   result: 'WIN' | 'LOSS' | 'BREAKEVEN';
+  strategyName?: string;
 }
 
 export class RiskManager extends EventEmitter {
@@ -194,7 +195,8 @@ export class RiskManager extends EventEmitter {
           : (tradeDetails.pnlPercent || 0),
         entryTime: tradeDetails.entryTime || new Date(),
         exitTime: tradeDetails.exitTime || new Date(),
-        result: netPnL > 0 ? 'WIN' : 'LOSS' // Strict, slightly positive is win, even 0 is break-even but simplified
+        result: netPnL > 0 ? 'WIN' : 'LOSS', // Strict, slightly positive is win, even 0 is break-even but simplified
+        strategyName: tradeDetails.strategyName,
       };
 
       if (Math.abs(netPnL) < 1) trade.result = 'BREAKEVEN'; // Tolerance
@@ -272,6 +274,7 @@ export class RiskManager extends EventEmitter {
       dailyLossLimit: dailyLossLimit,
       dailyLossPercentage: lossPercentage,
       maxDailyLossPercent: this.riskLimits.maxDailyLossPercent,
+      maxTradesPerDay: this.riskLimits.maxTradesPerDay,
       isAtRiskLimit: this.dailyPnL < 0 && Math.abs(this.dailyPnL) >= dailyLossLimit
     };
   }

@@ -71,6 +71,7 @@ export interface Position {
   useTrailingSL?: boolean;
   initialStopLoss?: number;
   isTrailing?: boolean;
+  strategyName?: string;
 }
 
 export interface Trade {
@@ -98,6 +99,8 @@ export interface StrategySignal {
   /** Session day high/low at the moment the signal fired (for Telegram display). */
   dayHigh?: number;
   dayLow?: number;
+  /** Populated by SignalArbiter — which strategy won the arbitration. */
+  strategyName?: string;
 }
 
 export interface MarketData {

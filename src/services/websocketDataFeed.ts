@@ -809,11 +809,19 @@ export class WebSocketDataFeed extends EventEmitter {
   }
 
   /**
-   * Safely reconnect with error handling to prevent crashes
+   * Safely reconnect with error handling to prevent crashes.
+   * Re-authenticates first so an expired JWT token doesn't block recovery.
    */
   private async reconnectSafely(): Promise<void> {
     try {
-      logger.info('🔌 Executing reconnection attempt...');
+      logger.info('🔌 Executing reconnection attempt — refreshing auth token first...');
+      // Re-login to get a fresh JWT before reconnecting; stale tokens cause silent failures
+      const reauthed = await this.client.login();
+      if (!reauthed) {
+        logger.warn('⚠️ Re-authentication failed — will retry on next reconnect cycle');
+        return;
+      }
+      logger.info('✅ Re-authentication successful, reconnecting WebSocket...');
       await this.connect();
     } catch (error: any) {
       logger.error('❌ Reconnection failed with error', {

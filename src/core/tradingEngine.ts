@@ -53,6 +53,7 @@ export class TradingEngine extends EventEmitter {
   private dashboardDisplay?: DashboardDisplay;
   private strategies: Map<string, IStrategy> = new Map();
   private isRunning: boolean = false;
+  private isEmergencyShuttingDown: boolean = false;
   private signalArbiter: SignalArbiter;
   private candleDataService: CandleDataService | null = null;
   /** Tracks which candle strategies have already had their handlers registered */
@@ -228,6 +229,7 @@ export class TradingEngine extends EventEmitter {
         pnlPercent: position.pnlPercent,
         entryTime: position.entryTime,
         exitTime: position.exitTime || new Date(),
+        strategyName: position.strategyName,
       });
 
       // IMPROVEMENT: Record trade in metrics tracker for comprehensive analytics
@@ -1020,12 +1022,13 @@ export class TradingEngine extends EventEmitter {
             );
           }
 
-          // Stamp SL and target on the position object so monitoring, trailing SL,
-          // live status, and exit messages all have correct values.
+          // Stamp SL, target, and originating strategy on the position object so
+          // monitoring, trailing SL, live status, and exit messages all have correct values.
           const openedPosition = this.positionManager.getPosition(signal.symbol);
           if (openedPosition) {
-            openedPosition.stopLoss = finalSL;
-            openedPosition.target   = finalTarget;
+            openedPosition.stopLoss     = finalSL;
+            openedPosition.target       = finalTarget;
+            openedPosition.strategyName = signal.strategyName;
           }
 
           // Get account info for telegram
@@ -1263,6 +1266,14 @@ export class TradingEngine extends EventEmitter {
       const losing  = trades.filter(t => t.result === 'LOSS').length;
       const winRate = trades.length > 0 ? (winning / trades.length) * 100 : 0;
 
+      const tradesRemaining = Math.max(0, stats.maxTradesPerDay - trades.length);
+
+      // Minutes until auto square-off (in IST)
+      const [soH, soM] = (this.config.trading.autoSquareOffTime || '15:20').split(':').map(Number);
+      const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const soMs   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), soH, soM).getTime();
+      const minsToSquareOff = Math.max(0, Math.round((soMs - istNow.getTime()) / 60000));
+
       await this.telegramBot.sendLiveStatus({
         mode:               this.config.trading.mode,
         balance,
@@ -1279,13 +1290,16 @@ export class TradingEngine extends EventEmitter {
           target:       p.target,
           entryTime:    p.entryTime,
         })),
-        dailyPnL:           stats.dailyPnL,
-        totalTrades:        trades.length,
-        winningTrades:      winning,
-        losingTrades:       losing,
+        dailyPnL:            stats.dailyPnL,
+        totalTrades:         trades.length,
+        winningTrades:       winning,
+        losingTrades:        losing,
         winRate,
-        dailyLossPercent:   stats.dailyLossPercentage,
+        dailyLossPercent:    stats.dailyLossPercentage,
         maxDailyLossPercent: stats.maxDailyLossPercent,
+        tradesRemaining,
+        minsToSquareOff,
+        strategyStats:       this.computeStrategyStats(trades),
       });
     } catch (err: any) {
       logger.error('Failed to send live status', { error: err.message });
@@ -1352,23 +1366,62 @@ export class TradingEngine extends EventEmitter {
     await this.telegramBot.sendRiskStatsReport(stats);
   }
 
+  private computeStrategyStats(trades: any[]): Array<{ name: string; trades: number; wins: number; losses: number; pnl: number }> {
+    const map = new Map<string, { trades: number; wins: number; losses: number; pnl: number }>();
+    for (const t of trades) {
+      const name = t.strategyName || 'Unknown';
+      if (!map.has(name)) map.set(name, { trades: 0, wins: 0, losses: 0, pnl: 0 });
+      const s = map.get(name)!;
+      s.trades++;
+      if (t.result === 'WIN') s.wins++;
+      else if (t.result === 'LOSS') s.losses++;
+      s.pnl += t.netPnL ?? t.pnl ?? 0;
+    }
+    return Array.from(map.entries())
+      .map(([name, s]) => ({ name, ...s }))
+      .sort((a, b) => b.pnl - a.pnl);
+  }
+
   private async sendDailySummaryReport(): Promise<void> {
-    const stats = this.riskManager.getRiskStats();
+    const stats  = this.riskManager.getRiskStats();
     const trades = this.riskManager.getDailyTrades();
 
-    // Calculate trade statistics
-    const winningTrades = trades.filter((t) => t.result === "WIN").length;
-    const losingTrades = trades.filter((t) => t.result === "LOSS").length;
-    const breakEvenTrades = trades.filter(
-      (t) => t.result === "BREAKEVEN",
-    ).length;
-    const winRate =
-      trades.length > 0 ? (winningTrades / trades.length) * 100 : 0;
+    const wins   = trades.filter(t => t.result === 'WIN');
+    const losses = trades.filter(t => t.result === 'LOSS');
 
-    const largestWin =
-      trades.length > 0 ? Math.max(...trades.map((t) => t.netPnL), 0) : 0;
-    const largestLoss =
-      trades.length > 0 ? Math.min(...trades.map((t) => t.netPnL), 0) : 0;
+    const winningTrades   = wins.length;
+    const losingTrades    = losses.length;
+    const breakEvenTrades = trades.filter(t => t.result === 'BREAKEVEN').length;
+    const winRate         = trades.length > 0 ? (winningTrades / trades.length) * 100 : 0;
+    const largestWin      = trades.length > 0 ? Math.max(...trades.map(t => t.netPnL), 0) : 0;
+    const largestLoss     = trades.length > 0 ? Math.min(...trades.map(t => t.netPnL), 0) : 0;
+
+    const totalGrossWin  = wins.reduce((s, t) => s + t.netPnL, 0);
+    const totalGrossLoss = losses.reduce((s, t) => s + Math.abs(t.netPnL), 0);
+    const avgWin         = wins.length   > 0 ? totalGrossWin  / wins.length   : 0;
+    const avgLoss        = losses.length > 0 ? totalGrossLoss / losses.length : 0;
+    const profitFactor   = totalGrossLoss > 0 ? totalGrossWin / totalGrossLoss : (totalGrossWin > 0 ? 99 : 0);
+    const wr             = winRate / 100;
+    const evPerTrade     = trades.length > 0 ? (wr * avgWin) - ((1 - wr) * avgLoss) : 0;
+    const totalCharges   = trades.reduce((s, t) => s + (t.charges || 0), 0);
+
+    // Max consecutive losses (in chronological order)
+    let maxConsecLosses = 0;
+    let streak = 0;
+    for (const t of trades) {
+      if (t.result === 'LOSS') { streak++; maxConsecLosses = Math.max(maxConsecLosses, streak); }
+      else { streak = 0; }
+    }
+
+    // Avg hold time in minutes
+    const avgHoldMins = (arr: typeof trades) => {
+      const valid = arr.filter(t => t.entryTime && t.exitTime);
+      if (valid.length === 0) return 0;
+      return valid.reduce((s, t) => s + (new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()), 0) / valid.length / 60000;
+    };
+    const avgHoldAll  = avgHoldMins(trades);
+    const avgHoldWins = avgHoldMins(wins);
+    const avgHoldLoss = avgHoldMins(losses);
 
     // Derive ending balance from starting balance + net P&L so the summary is
     // self-consistent (Ending − Starting == Net P&L) regardless of broker mode.
@@ -1383,9 +1436,19 @@ export class TradingEngine extends EventEmitter {
       winRate,
       largestWin,
       largestLoss,
-      trades: trades,
+      avgWin,
+      avgLoss,
+      profitFactor,
+      evPerTrade,
+      totalCharges,
+      maxConsecLosses,
+      avgHoldAll,
+      avgHoldWins,
+      avgHoldLoss,
+      trades,
       startingBalance: this.initialBalance,
       endingBalance,
+      strategyStats: this.computeStrategyStats(trades),
     });
 
     logger.info("📊 Daily summary report sent", {
@@ -1512,10 +1575,19 @@ export class TradingEngine extends EventEmitter {
    * Used when critical failures are detected (data feed dead, etc.)
    */
   public async activateEmergencyShutdown(reason: string): Promise<void> {
+    if (this.isEmergencyShuttingDown) {
+      logger.warn("⚠️ Emergency shutdown already in progress, ignoring duplicate trigger", { reason });
+      return;
+    }
+    this.isEmergencyShuttingDown = true;
+
     logger.error("🚨 EMERGENCY SHUTDOWN ACTIVATED", { reason });
 
     // Activate kill switch to prevent new trades
     configManager.setKillSwitch(true);
+
+    // Stop heartbeat immediately so no further data_feed_dead events fire during shutdown
+    this.heartbeatMonitor.stop();
 
     await this.telegramBot.sendAlert(
       "🚨 EMERGENCY SHUTDOWN",
@@ -1526,7 +1598,7 @@ export class TradingEngine extends EventEmitter {
         `✅ All positions being closed\n` +
         `✅ Strategies stopped\n` +
         `✅ Data feeds stopped\n\n` +
-        `Manual intervention required before restart.`,
+        `Bot will restart automatically.`,
     );
 
     // Close all positions immediately
@@ -1535,14 +1607,18 @@ export class TradingEngine extends EventEmitter {
     // Stop accepting new signals
     await this.stopStrategies();
 
-    // WebSocket will be disconnected on broker.disconnect()
+    // Disconnect broker (closes WebSocket)
+    await this.broker.disconnect();
 
-    // Stop monitoring services
-    this.heartbeatMonitor.stop();
+    // Stop remaining monitoring services
     this.stopLossManager.stopMonitoring();
+    this.stopBackgroundReconnection();
 
-    logger.info("✅ Emergency shutdown complete");
+    logger.info("✅ Emergency shutdown complete — exiting process for clean restart");
     logger.audit("EMERGENCY_SHUTDOWN", { reason });
+
+    // Exit so the process supervisor (Render / PM2 / systemd) restarts with a fresh login
+    process.exit(1);
   }
 
   public async start(): Promise<void> {

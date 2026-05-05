@@ -92,6 +92,7 @@ export class SignalArbiter extends EventEmitter {
       );
     }
 
+    winner.signal.strategyName = winner.strategyName;
     this.emit('selected', winner.signal);
   }
 }
